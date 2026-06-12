@@ -1,0 +1,8 @@
+{
+  "name": "kasus-kompass",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node tests/regression.test.js && node --check data.js && node --check state.js && node --check atlas.js && node --check adjektiv.js && node --check genus.js && node --check pronomen.js && node --check drill.js && node --check stats.js && node --check app.js && node --check service-worker.js"
+  }
+}

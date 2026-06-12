@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="description" content="Interaktiver Offline-Trainer fuer deutsche Artikel, Kasus, Genus, Pronomen und Adjektivdeklination mit deutschen und arabischen Erklaerungen.">
+  <meta name="theme-color" content="#0e1014">
+  <meta name="application-name" content="Deutsch-Kompass">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Deutsch-Kompass">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Deutsch-Kompass — Artikel, Kasus, Genus &amp; Pronomen trainieren</title>
+  <link rel="stylesheet" href="style.css?v=pwa-20260612k">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+</head>
+<body>
+
+  <header>
+    <div class="brand"><span class="compass">🧭</span><b>Deutsch</b>-Kompass
+      <span class="case-dots" title="Nominativ · Akkusativ · Dativ · Genitiv">
+        <i class="bg-nom"></i><i class="bg-akk"></i><i class="bg-dat"></i><i class="bg-gen"></i>
+      </span>
+    </div>
+    <nav id="nav" aria-label="Hauptbereiche">
+      <button type="button" data-view="atlas" class="active">Atlas</button>
+      <button type="button" data-view="adjektiv">Adjektivdeklination</button>
+      <button type="button" data-view="genus">Genus</button>
+      <button type="button" data-view="pronomen">Pronomen</button>
+      <button type="button" data-view="drill">Drill-Arena</button>
+      <button type="button" data-view="stats">Statistik</button>
+    </nav>
+    <div class="lang-toggle" id="langToggle" title="Sprache der Erklärungen">
+      <button type="button" data-lang="de" class="active">DE</button>
+      <button data-lang="ar">عربي</button>
+    </div>
+    <button id="sfxToggle" class="sfx-toggle" type="button">🔊</button>
+  </header>
+
+  <main>
+    <section id="view-atlas" class="view active"></section>
+    <section id="view-adjektiv" class="view"></section>
+    <section id="view-genus" class="view"></section>
+    <section id="view-pronomen" class="view"></section>
+    <section id="view-drill" class="view"></section>
+    <section id="view-stats" class="view"></section>
+  </main>
+
+  <footer>
+    Tastatur: <kbd>1</kbd>–<kbd>9</kbd> antworten · <kbd>Enter</kbd> weiter ·
+    <kbd>A</kbd> Atlas · <kbd>J</kbd> Adjektivdeklination · <kbd>G</kbd> Genus · <kbd>P</kbd> Pronomen · <kbd>D</kbd> Drill · <kbd>S</kbd> Statistik
+    — alles offline, Fortschritt im Browser gespeichert.
+  </footer>
+
+  <script src="data.js?v=pwa-20260612k"></script>
+  <script src="state.js?v=pwa-20260612k"></script>
+  <script src="atlas.js?v=pwa-20260612k"></script>
+  <script src="adjektiv.js?v=pwa-20260612k"></script>
+  <script src="genus.js?v=pwa-20260612k"></script>
+  <script src="pronomen.js?v=pwa-20260612k"></script>
+  <script src="drill.js?v=pwa-20260612k"></script>
+  <script src="stats.js?v=pwa-20260612k"></script>
+  <script src="app.js?v=pwa-20260612k"></script>
+</body>
+</html>
