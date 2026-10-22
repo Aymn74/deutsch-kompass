@@ -8,10 +8,11 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as G from './geo.js';
 import { U, makeGroundMaterial, makeSky, poolMat } from './materials.js';
-import { City } from './city.js';
-import { buildLandmarks, buildMetro } from './landmarks.js';
-import { Traffic } from './traffic.js';
+import { buildLandmarks } from './landmarks.js';
 import { Player } from './player.js';
+import { OSM, RC, F } from './osm.js';
+import { World } from './world.js';
+import { Cars } from './cars.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (t, p) => { $('loading-status').textContent = t; if (p !== undefined) $('loading-progress').style.width = (p * 100).toFixed(0) + '%'; };
@@ -55,21 +56,6 @@ scene.add(sun, sun.target);
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(90000, 90000).rotateX(-Math.PI / 2), makeGroundMaterial());
 ground.receiveShadow = true;
 scene.add(ground);
-{
-  const asphalt = makeGroundMaterial({ asphalt: true });
-  const geos = [];
-  for (const r of G.ROADS_U) {
-    const a = G.toWorld(r.c, (G.EXT.v0 + G.EXT.v1) / 2);
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(r.w, G.EXT.v1 - G.EXT.v0).rotateX(-Math.PI / 2), asphalt);
-    m.position.set(a.x, 0.03, a.z); m.rotation.y = G.TH; m.receiveShadow = true; scene.add(m);
-  }
-  for (const r of G.ROADS_V) {
-    const a = G.toWorld((G.EXT.u0 + G.EXT.u1) / 2, r.c);
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(G.EXT.u1 - G.EXT.u0, r.w).rotateX(-Math.PI / 2), asphalt);
-    m.position.set(a.x, 0.035, a.z); m.rotation.y = G.TH; m.receiveShadow = true; scene.add(m);
-  }
-}
-
 // ---------- atmosphere presets ----------
 const PRESETS = {
   noon: { ar: 'الظهيرة', sunEl: 70, sunAz: 165, sun: '#fff2df', sunI: 3.1, hs: '#c3d5e6', hg: '#b8956a', hi: 0.95, top: '#5b8fca', horizon: '#dcd6c4', bottom: '#c9b08a', glow: '#fff1d0', fog: '#d6cdb9', near: 700, far: 12000, night: 0, exp: 0.9, stars: 0, bloom: 0.08, env: 1.0 },
@@ -142,10 +128,8 @@ if (!touch) {
 }
 
 // ---------- world ----------
-const city = new City(scene);
-const traffic = new Traffic(scene);
 const player = new Player(scene);
-let metro = null;
+let osm = null, world = null, traffic = null;
 
 // pedestrians: a light crowd on the pavements near the player
 const peds = (() => {
@@ -179,28 +163,24 @@ const peds = (() => {
   const m = new THREE.Matrix4(), zero = new THREE.Matrix4();
   const white = new THREE.Color('#f3f1ec'), black = new THREE.Color('#15151a'), skin = new THREE.Color('#b98a66'), scarf = new THREE.Color('#d9d2cc');
   function respawn(p, fx, fz) {
-    for (let tries = 0; tries < 12; tries++) {
-      const a = Math.random() * Math.PI * 2, r = 30 + Math.random() * 320;
-      const g = G.toGrid(fx + Math.cos(a) * r, fz + Math.sin(a) * r);
-      const c = G.cellAt(g.u, g.v);
-      if (c.type !== 'block' || !['commercial', 'tower', 'old', 'plaza', 'apt', 'mosque', 'park'].includes(c.info.kind)) continue;
-      const rc = c.rect;
-      p.rect = { u0: rc.u0 + 1.6, u1: rc.u1 - 1.6, v0: rc.v0 + 1.6, v1: rc.v1 - 1.6 };
-      p.per = 2 * (p.rect.u1 - p.rect.u0 + p.rect.v1 - p.rect.v0);
-      p.s = Math.random() * p.per; p.dir = Math.random() < 0.5 ? 1 : -1; p.v = 1.0 + Math.random() * 0.6;
-      p.abaya = Math.random() < 0.35;
-      p.ok = true;
+    for (let tries = 0; tries < 10; tries++) {
+      const a = Math.random() * Math.PI * 2, r = 20 + Math.random() * 300;
+      const hit = osm.nearestRoad(fx + Math.cos(a) * r, fz + Math.sin(a) * r, 60, (rr) => { const c = osm.cls(rr); return c >= RC.primary && c <= RC.living && !(osm.flags(rr) & (F.bridge | F.tunnel)); });
+      if (!hit) continue;
+      const st = osm.s.roads[hit.road * 4 + 2], P = osm.s.roadPts, k = (st + hit.seg) * 2;
+      const x0 = P[k], z0 = P[k + 1], x1 = P[k + 2], z1 = P[k + 3], L = Math.hypot(x1 - x0, z1 - z0);
+      if (L < 15) continue;
+      const side = Math.random() < 0.5 ? 1 : -1, off = osm.width(hit.road) / 2 + 1.6;
+      const nx = -(z1 - z0) / L * side * off, nz = (x1 - x0) / L * side * off;
+      Object.assign(p, { ax: x0 + nx, az: z0 + nz, bx: x1 + nx, bz: z1 + nz, L, s: Math.random() * L, dir: Math.random() < 0.5 ? 1 : -1, v: 1.0 + Math.random() * 0.6, abaya: Math.random() < 0.35, ok: true });
       return;
     }
     p.ok = false;
   }
   function at(p) {
-    const r = p.rect, w = r.u1 - r.u0, h = r.v1 - r.v0;
-    let s = ((p.s % p.per) + p.per) % p.per;
-    if (s < w) return [r.u0 + s, r.v0, 0];
-    s -= w; if (s < h) return [r.u1, r.v0 + s, 1];
-    s -= h; if (s < w) return [r.u1 - s, r.v1, 2];
-    s -= w; return [r.u0, r.v1 - s, 3];
+    if (p.s > p.L - 2) { p.s = p.L - 2; p.dir = -1; } else if (p.s < 2) { p.s = 2; p.dir = 1; }
+    const t = p.s / p.L;
+    return [p.ax + (p.bx - p.ax) * t, p.az + (p.bz - p.az) * t];
   }
   return {
     update(dt, fx, fz, show) {
@@ -210,11 +190,10 @@ const peds = (() => {
         if (!p.ok || (p.wx - fx) ** 2 + (p.wz - fz) ** 2 > 420 * 420) respawn(p, fx, fz);
         if (!p.ok) { m.makeScale(0, 0, 0); body.setMatrixAt(i, m); head.setMatrixAt(i, m); return; }
         p.s += p.v * p.dir * dt;
-        const [u, v, side] = at(p);
-        const w = G.toWorld(u, v);
-        p.wx = w.x; p.wz = w.z;
-        const yaw = G.TH + side * Math.PI / 2 + (p.dir < 0 ? Math.PI : 0);
-        m.makeRotationY(yaw); m.setPosition(w.x, 0.22 + Math.abs(Math.sin(p.s * 3.5)) * 0.03, w.z);
+        const [wx, wz] = at(p);
+        p.wx = wx; p.wz = wz;
+        const yaw = Math.atan2(-(p.bz - p.az) * p.dir, (p.bx - p.ax) * p.dir);
+        m.makeRotationY(yaw); m.setPosition(wx, 0.08 + Math.abs(Math.sin(p.s * 3.5)) * 0.03, wz);
         (p.abaya ? head : body).setMatrixAt(i, m);
         zero.makeScale(0, 0, 0); (p.abaya ? body : head).setMatrixAt(i, zero);
         body.setColorAt(i, i % 7 ? white : scarf);
@@ -233,12 +212,24 @@ const SCENIC = [
   { id: 'skybridge', ar: 'من جسر برج المملكة', pos: () => { const v = at('kingdom'); v.y = 316; return v; }, look: () => { const v = at('faisaliah'); v.y = 150; return v; }, drift: 0.02 },
   { id: 'kingdomOrbit', ar: 'حول برج المملكة', orbit: { c: 'kingdom', r: 520, h: 240, ty: 170, s: 0.035 } },
   { id: 'faisaliah', ar: 'كرة الفيصلية', orbit: { c: 'faisaliah', r: 260, h: 210, ty: 200, s: -0.05 } },
-  { id: 'kfr', ar: 'طريق الملك فهد', pos: () => { const w = G.toWorld(G.ROAD_KFR.c, -3600); return new THREE.Vector3(w.x, 70, w.z); }, look: () => { const w = G.toWorld(G.ROAD_KFR.c, 1200); return new THREE.Vector3(w.x, 120, w.z); }, drift: 0 },
+  { id: 'kfr', ar: 'طريق الملك فهد', pos: () => kfrShot().pos, look: () => kfrShot().look, drift: 0 },
   { id: 'kafd', ar: 'أفق المركز المالي', orbit: { c: 'kafd', r: 1100, h: 320, ty: 180, s: 0.025 } },
   { id: 'masmak', ar: 'ساحة المصمك', pos: () => at('masmak', -60, 90).setY(14), look: () => at('masmak').setY(10), drift: 0.01 },
   { id: 'diriyah', ar: 'الدرعية ووادي حنيفة', orbit: { c: 'turaif', r: 700, h: 160, ty: 10, s: 0.02 } },
-  { id: 'skyline', ar: 'أفق الرياض', pos: () => { const w = G.toWorld(3600, -8200); return new THREE.Vector3(w.x, 420, w.z); }, look: () => at('kingdom').setY(120), drift: 0 }
+  { id: 'skyline', ar: 'أفق الرياض', pos: () => { const w = G.geo(24.6560, 46.7250); return new THREE.Vector3(w.x, 420, w.z); }, look: () => at('kingdom').setY(120), drift: 0 }
 ];
+// hover above King Fahd Road south of Al Faisaliah, looking north up the road
+let kfrCache = null;
+function kfrShot() {
+  if (kfrCache) return kfrCache;
+  const w = G.geo(24.6790, 46.6915);
+  const hit = osm && osm.nearestRoad(w.x, w.z, 600, (r) => { const n = osm.nameOf(r); return n && /King Fahd/.test(n[1]) && osm.cls(r) <= RC.trunk; });
+  const x = hit ? hit.x : w.x, z = hit ? hit.z : w.z;
+  let dx = hit ? hit.dirx : -0.47, dz = hit ? hit.dirz : -0.88;
+  if (dz > 0) { dx = -dx; dz = -dz; }   // north is -z
+  kfrCache = { pos: new THREE.Vector3(x, 85, z), look: new THREE.Vector3(x + dx * 1800, 60, z + dz * 1800) };
+  return kfrCache;
+}
 const FOLLOW = [
   { id: 'chase', ar: 'مطاردة' },
   { id: 'pov', ar: 'منظور السائق' },
@@ -412,23 +403,30 @@ function setMode(m) {
   document.querySelectorAll('.touch-action[data-touch-action="down"]').forEach((b) => (b.hidden = m !== 'heli'));
   const upLabel = document.querySelector('[data-touch-label="up"]'); if (upLabel) upLabel.textContent = m === 'heli' ? 'صعود' : 'قفز';
 }
+// each teleport lands on the nearest big road to a real spot, facing along the traffic
 const TELEPORTS = [
-  { id: 'kingdom', ar: 'برج المملكة', sub: 'طريق الملك فهد · العليا', u: G.ROAD_KFR.c + 9.5, v: -420, dir: 'v+' },
-  { id: 'faisaliah', ar: 'برج الفيصلية', sub: 'طريق الملك فهد · العليا', u: G.ROAD_KFR.c - 9.5, v: -2050, dir: 'v-' },
-  { id: 'tahlia', ar: 'شارع التحلية', sub: 'السليمانية', u: 900, v: -1646 - 10, dir: 'u+' },
-  { id: 'kafd', ar: 'المركز المالي (كافد)', sub: 'الطريق الدائري الشمالي', u: G.ROAD_KFR.c + 12, v: 6200, dir: 'v+' },
-  { id: 'rafal', ar: 'برج رافال', sub: 'طريق الملك فهد · الصحافة', u: G.ROAD_KFR.c + 12, v: 9500, dir: 'v+' },
-  { id: 'masmak', ar: 'قصر المصمك', sub: 'الديرة · وسط الرياض', place: 'masmak', off: [-40, 110] },
-  { id: 'museum', ar: 'المتحف الوطني', sub: 'المربع', place: 'museum', off: [0, -160] },
-  { id: 'turaif', ar: 'حي الطريف', sub: 'الدرعية · وادي حنيفة', place: 'turaif', off: [420, 0] }
+  { id: 'kingdom', ar: 'برج المملكة', sub: 'طريق الملك فهد · العليا', at: [24.7095, 46.6745] },
+  { id: 'faisaliah', ar: 'برج الفيصلية', sub: 'طريق الملك فهد · العليا', at: [24.6925, 46.6838] },
+  { id: 'tahlia', ar: 'شارع التحلية', sub: 'السليمانية', at: [24.6985, 46.6905] },
+  { id: 'kafd', ar: 'المركز المالي (كافد)', sub: 'الطريق الدائري الشمالي', at: [24.7650, 46.6440] },
+  { id: 'rafal', ar: 'برج رافال', sub: 'طريق الملك فهد · الصحافة', at: [24.7915, 46.6345] },
+  { id: 'masmak', ar: 'قصر المصمك', sub: 'الديرة · وسط الرياض', at: [24.6305, 46.7150], small: true },
+  { id: 'museum', ar: 'المتحف الوطني', sub: 'المربع', at: [24.6460, 46.7090], small: true },
+  { id: 'turaif', ar: 'حي الطريف', sub: 'الدرعية · وادي حنيفة', at: [24.7350, 46.5790], small: true }
 ];
 function teleport(t) {
-  if (t.place) { const p = P[t.place]; player.teleport(p.x + t.off[0], p.z + t.off[1]); }
-  else {
-    const w = G.toWorld(t.u, t.v);
-    const yaw = t.dir === 'v+' ? G.TH + Math.PI / 2 : t.dir === 'v-' ? G.TH - Math.PI / 2 : t.dir === 'u+' ? G.TH : G.TH + Math.PI;
-    player.teleport(w.x, w.z, yaw);
+  const w = G.geo(t.at[0], t.at[1]);
+  let x = w.x, z = w.z, yaw;
+  const want = (r) => !(osm.flags(r) & (F.tunnel | F.bridge)) && (t.small ? osm.cls(r) <= RC.living : osm.cls(r) <= RC.tertiary);
+  const hit = osm && osm.nearestRoad(x, z, 400, want);
+  if (hit) {
+    const ow = osm.flags(hit.road) & F.oneway, hw = osm.width(hit.road) / 2;
+    // keep right: inside lane of a one-way carriageway, right half of a two-way street
+    const off = ow ? hw * 0.35 : hw * 0.5;
+    x = hit.x - hit.dirz * off; z = hit.z + hit.dirx * off;
+    yaw = Math.atan2(-hit.dirz, hit.dirx);
   }
+  player.teleport(x, z, yaw);
   camPos.set(player.pos.x, 2000, player.pos.z); // snaps the follow camera
   if (!SCENIC.find((s) => s.id === camId) && camId !== 'drone') setCamera(camId);
 }
@@ -472,33 +470,75 @@ function toggleHud() {
 
 // ---------- minimap ----------
 const mm = $('minimap-canvas'), mctx = mm.getContext('2d');
-const ROAD_COL = { freeway: '#e9c46a', major: '#f4efe6', minor: '#cfc6b6' };
+// road colours by class (motorway, trunk, primary, secondary, tertiary, local...)
+const ROAD_COL = ['#f0b44c', '#f0b44c', '#f3d27a', '#f4efe6', '#e9e3d6', '#c9c1b2', '#bdb5a6', '#bdb5a6', '#a39b8d', '#f0b44c', '#e9e3d6', '#c9c1b2'];
+const ROAD_MIN = [2.6, 2.4, 2.0, 1.7, 1.4, 1, 1, 1, 0.7, 1.4, 1.1, 0.8];
+// draws every road crossing the view; at small scales only the main network
 function drawRoadsOn(ctx, toScreen, scale, x0, z0, x1, z1) {
-  // arterials: grid lines clipped to the extent
-  for (const [list, axis] of [[G.ROADS_U, 'u'], [G.ROADS_V, 'v']]) for (const r of list) {
-    const a = axis === 'u' ? G.toWorld(r.c, G.EXT.v0) : G.toWorld(G.EXT.u0, r.c);
-    const b = axis === 'u' ? G.toWorld(r.c, G.EXT.v1) : G.toWorld(G.EXT.u1, r.c);
-    const A = toScreen(a.x, a.z), B = toScreen(b.x, b.z);
-    ctx.strokeStyle = ROAD_COL[r.kind];
-    ctx.lineWidth = Math.max(r.kind === 'freeway' ? 2.6 : 1.6, r.w * scale);
-    ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
+  const maxCls = scale < 0.03 ? RC.secondary : scale < 0.08 ? RC.tertiary : 11;
+  const seen = new Set(), P = osm.s.roadPts;
+  const order = [];
+  osm.forItems(osm.segGrid, x0, z0, x1, z1, (v) => { const r = Math.floor(v / 65536); if (seen.has(r)) return; seen.add(r); const c = osm.cls(r); if (c <= maxCls && !(osm.flags(r) & F.tunnel)) order.push(r); });
+  order.sort((a, b) => osm.cls(b) - osm.cls(a));
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const r of order) {
+    const c = osm.cls(r), st = osm.s.roads[r * 4 + 2], n = osm.s.roads[r * 4 + 3];
+    ctx.strokeStyle = ROAD_COL[c];
+    ctx.lineWidth = Math.max(ROAD_MIN[c], osm.width(r) * scale);
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) { const q = toScreen(P[(st + i) * 2], P[(st + i) * 2 + 1]); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }
+    ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+}
+function drawBlocks(ctx, toScreen, x0, z0, x1, z1) {
+  const B = osm.s.bldPts, seen = new Set();
+  ctx.fillStyle = '#5a534a';
+  ctx.beginPath();
+  osm.forItems(osm.bldGrid, x0, z0, x1, z1, (b) => {
+    if (seen.has(b)) return; seen.add(b);
+    const st = osm.s.buildings[b * 4 + 2], n = osm.s.buildings[b * 4 + 3];
+    for (let i = 0; i < n; i++) { const q = toScreen(B[(st + i) * 2], B[(st + i) * 2 + 1]); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }
+    ctx.closePath();
+  });
+  ctx.fill();
+  // generated plots
+  ctx.fillStyle = '#4a443c';
+  ctx.beginPath();
+  osm.forItems(osm.fillGrid, x0, z0, x1, z1, (f) => {
+    const p = osm.fill(f), c = Math.cos(p.yaw), s = Math.sin(p.yaw);
+    const corner = (a, b) => toScreen(p.x + a * c + b * s, p.z - a * s + b * c);
+    const q = [corner(-p.w / 2, -p.d / 2), corner(p.w / 2, -p.d / 2), corner(p.w / 2, p.d / 2), corner(-p.w / 2, p.d / 2)];
+    ctx.moveTo(q[0][0], q[0][1]); for (let i = 1; i < 4; i++) ctx.lineTo(q[i][0], q[i][1]); ctx.closePath();
+  });
+  ctx.fill();
+}
+function drawLand(ctx, toScreen, x0, z0, x1, z1) {
+  const LP = osm.s.landPts, nl = osm.s.land.length / 3;
+  const fills = { 1: '#4e6a33', 2: '#4f7a45', 3: '#5a6034', 4: '#3d5a2a', 6: '#2f5f6e', 8: '#6d6355' };
+  for (let l = 0; l < nl; l++) {
+    const k = osm.s.land[l * 3]; if (!fills[k]) continue;
+    const st = osm.s.land[l * 3 + 1], n = osm.s.land[l * 3 + 2];
+    const fx = LP[st * 2], fz = LP[st * 2 + 1];
+    if (fx < x0 - 3000 || fx > x1 + 3000 || fz < z0 - 3000 || fz > z1 + 3000) continue;
+    ctx.fillStyle = fills[k];
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) { const q = toScreen(LP[(st + i) * 2], LP[(st + i) * 2 + 1]); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }
+    ctx.fill();
   }
 }
-const KIND_FILL = { villa: '#3b3833', apt: '#454039', commercial: '#4c4538', tower: '#4f5761', old: '#5a4632', mosque: '#3f5a46', park: '#3d5a2c', plaza: '#57524a', vacant: '#4a3f30', wadi: '#3a4a26' };
-function drawBlocks(ctx, toScreen, cx, cz, R) {
-  const g = G.toGrid(cx, cz);
-  G.blocksIn(g.u - R, g.u + R, g.v - R, g.v + R, (sb, ku, kv, r, info) => {
-    const f = KIND_FILL[info.kind]; if (!f) return;
-    const c = [G.toWorld(r.u0, r.v0), G.toWorld(r.u1, r.v0), G.toWorld(r.u1, r.v1), G.toWorld(r.u0, r.v1)].map((w) => toScreen(w.x, w.z));
-    ctx.fillStyle = f;
-    ctx.beginPath(); ctx.moveTo(c[0][0], c[0][1]); for (let i = 1; i < 4; i++) ctx.lineTo(c[i][0], c[i][1]); ctx.closePath(); ctx.fill();
-  });
-}
 function drawWadi(ctx, toScreen, scale) {
-  ctx.strokeStyle = 'rgba(92,120,60,0.85)'; ctx.lineWidth = Math.max(3, 460 * scale);
+  ctx.strokeStyle = 'rgba(92,120,60,0.6)'; ctx.lineWidth = Math.max(3, 460 * scale);
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.beginPath(); G.WADI.forEach((w, i) => { const s = toScreen(w.x, w.z); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }); ctx.stroke();
   ctx.lineCap = 'butt';
+}
+// the name of the road under a point (falls back to the nearest named road close by)
+function roadName(x, z) {
+  const hit = osm.nearestRoad(x, z, 45, (r) => osm.nameOf(r) && !(osm.flags(r) & F.tunnel));
+  if (!hit) return null;
+  const [ar, en] = osm.nameOf(hit.road);
+  return { ar: ar || en, en: en || '' };
 }
 let mmTimer = 0;
 function drawMinimap() {
@@ -517,9 +557,9 @@ function drawMinimap() {
     const c = Math.cos(rot), s = Math.sin(rot);
     return [size / 2 + (dx * c - dz * s) * scale, size / 2 + (dx * s + dz * c) * scale];
   };
-  drawBlocks(ctx, toScreen, p.x, p.z, R * 1.2);
-  drawWadi(ctx, toScreen, scale);
-  drawRoadsOn(ctx, toScreen, scale);
+  drawLand(ctx, toScreen, p.x - R * 1.5, p.z - R * 1.5, p.x + R * 1.5, p.z + R * 1.5);
+  if (R < 900) drawBlocks(ctx, toScreen, p.x - R * 1.5, p.z - R * 1.5, p.x + R * 1.5, p.z + R * 1.5);
+  drawRoadsOn(ctx, toScreen, scale, p.x - R * 1.5, p.z - R * 1.5, p.x + R * 1.5, p.z + R * 1.5);
   for (const [k, pl] of Object.entries(P)) {
     const s = toScreen(pl.x, pl.z);
     if (s[0] < -10 || s[0] > size + 10 || s[1] < -10 || s[1] > size + 10) continue;
@@ -549,11 +589,11 @@ function drawAtlas() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#c9b38e'; ctx.fillRect(0, 0, W, H);
   const toScreen = (x, z) => [W / 2 + (x - view.x) * view.s, H / 2 + (z - view.z) * view.s];
-  const mw = G.MASK_WORLD; const a = toScreen(mw.x0, mw.z0), b = toScreen(mw.x1, mw.z1);
-  ctx.fillStyle = '#3a3631'; ctx.fillRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
-  if (view.s > 0.12) drawBlocks(ctx, toScreen, view.x, view.z, Math.max(W, H) / view.s * 0.75);
-  drawWadi(ctx, toScreen, view.s);
-  drawRoadsOn(ctx, toScreen, view.s);
+  ctx.fillStyle = '#3a3631'; ctx.fillRect(0, 0, W, H);
+  const vx0 = view.x - W / 2 / view.s, vx1 = view.x + W / 2 / view.s, vz0 = view.z - H / 2 / view.s, vz1 = view.z + H / 2 / view.s;
+  drawLand(ctx, toScreen, vx0, vz0, vx1, vz1);
+  if (view.s > 0.25) drawBlocks(ctx, toScreen, vx0, vz0, vx1, vz1);
+  drawRoadsOn(ctx, toScreen, view.s, vx0, vz0, vx1, vz1);
   ctx.textAlign = 'center';
   ctx.direction = 'rtl';
   if (view.s > 0.035) {
@@ -568,10 +608,22 @@ function drawAtlas() {
     ctx.fillStyle = '#fffaf0'; ctx.strokeStyle = 'rgba(20,16,12,0.85)'; ctx.lineWidth = 3.5;
     ctx.strokeText(pl.ar, s[0], s[1] - 10); ctx.fillText(pl.ar, s[0], s[1] - 10);
   }
-  if (view.s > 0.09) {
+  if (view.s > 0.12) {
+    // street names along the longest visible segment of each named road
     ctx.font = '600 11px "IBM Plex Sans Arabic", sans-serif'; ctx.fillStyle = '#20180e';
-    for (const r of G.ROADS_U) { const w = G.toWorld(r.c, G.toGrid(view.x, view.z).v + 200 / view.s); const s = toScreen(w.x, w.z); ctx.save(); ctx.translate(s[0], s[1]); ctx.rotate(-Math.PI / 2 + G.TH); ctx.fillText(r.ar, 0, 4); ctx.restore(); }
-    for (const r of G.ROADS_V) { const w = G.toWorld(G.toGrid(view.x, view.z).u - 260 / view.s, r.c); const s = toScreen(w.x, w.z); ctx.save(); ctx.translate(s[0], s[1]); ctx.rotate(G.TH); ctx.fillText(r.ar, 0, 4); ctx.restore(); }
+    const done = new Set(), P = osm.s.roadPts;
+    osm.forItems(osm.segGrid, vx0, vz0, vx1, vz1, (v) => {
+      const r = Math.floor(v / 65536), i = v % 65536, nm = osm.nameOf(r);
+      if (!nm || osm.cls(r) > (view.s > 0.4 ? 7 : RC.tertiary)) return;
+      const key = nm[0] || nm[1]; if (done.has(key)) return;
+      const st = osm.s.roads[r * 4 + 2], k = (st + i) * 2;
+      const L = Math.hypot(P[k + 2] - P[k], P[k + 3] - P[k + 1]) * view.s;
+      if (L < ctx.measureText(key).width + 20) return;
+      done.add(key);
+      const q = toScreen((P[k] + P[k + 2]) / 2, (P[k + 1] + P[k + 3]) / 2);
+      let ang = Math.atan2(P[k + 3] - P[k + 1], P[k + 2] - P[k]); if (ang > Math.PI / 2) ang -= Math.PI; if (ang < -Math.PI / 2) ang += Math.PI;
+      ctx.save(); ctx.translate(q[0], q[1]); ctx.rotate(ang); ctx.fillText(key, 0, 4); ctx.restore();
+    });
   }
   // player
   const s = toScreen(player.pos.x, player.pos.z);
@@ -596,7 +648,7 @@ let pin = null;
     if (drag && moved < 6) {
       const r = fm.getBoundingClientRect();
       pin = { x: view.x + (e.clientX - r.left - r.width / 2) / view.s, z: view.z + (e.clientY - r.top - r.height / 2) / view.s };
-      const d = G.districtAt(pin.x, pin.z), rd = G.roadAt(pin.x, pin.z);
+      const d = G.districtAt(pin.x, pin.z), rd = roadName(pin.x, pin.z);
       $('fullmap-pin-label').textContent = (rd ? rd.ar + ' · ' : '') + d.ar;
       $('fullmap-go').disabled = false;
       drawAtlas();
@@ -615,17 +667,31 @@ let pin = null;
   $('fullmap-locate').onclick = () => { view.x = player.pos.x; view.z = player.pos.z; drawAtlas(); };
   $('fullmap-go').onclick = () => { if (!pin) return; player.teleport(pin.x, pin.z); camPos.set(pin.x, 2000, pin.z); toggleMap(false); };
   const search = $('fullmap-search'), results = $('fullmap-results');
-  const entries = [
-    ...Object.values(P).map((p) => ({ ar: p.ar, en: p.en, x: p.x, z: p.z, kind: 'معلم' })),
-    ...G.DISTRICTS.map((d) => ({ ar: 'حي ' + d.ar, en: d.en, x: d.x, z: d.z, kind: 'حي' })),
-    ...G.ROADS_U.map((r) => { const w = G.toWorld(r.c, G.toGrid(0, 0).v); return { ar: r.ar, en: r.name, x: w.x, z: w.z, kind: 'طريق' }; }),
-    ...G.ROADS_V.map((r) => { const w = G.toWorld(G.toGrid(0, 0).u, r.c); return { ar: r.ar, en: r.name, x: w.x, z: w.z, kind: 'طريق' }; })
-  ];
+  let entries = null;
+  // built on first search: landmarks, districts and every named street (one entry per name, at its middle)
+  const searchIndex = () => {
+    if (entries) return entries;
+    entries = [
+      ...Object.values(P).map((p) => ({ ar: p.ar, en: p.en, x: p.x, z: p.z, kind: 'معلم' })),
+      ...G.DISTRICTS.map((d) => ({ ar: 'حي ' + d.ar, en: d.en, x: d.x, z: d.z, kind: 'حي' }))
+    ];
+    const byName = new Map(), RP = osm.s.roadPts;
+    for (let r = 0; r < osm.nRoads; r++) {
+      const nm = osm.nameOf(r); if (!nm) continue;
+      const key = nm[0] || nm[1];
+      const e = byName.get(key);
+      if (e && e.len >= osm.roadLen[r]) continue;
+      const st = osm.s.roads[r * 4 + 2], n = osm.s.roads[r * 4 + 3], mid = st + (n >> 1);
+      byName.set(key, { ar: nm[0] || nm[1], en: nm[1] || '', x: RP[mid * 2], z: RP[mid * 2 + 1], kind: osm.cls(r) <= RC.tertiary ? 'طريق' : 'شارع', len: osm.roadLen[r] });
+    }
+    entries.push(...[...byName.values()].sort((a, b) => b.len - a.len));
+    return entries;
+  };
   search.addEventListener('input', () => {
     const q = search.value.trim().toLowerCase();
     results.innerHTML = '';
     if (!q) return;
-    for (const e of entries.filter((e) => e.ar.includes(q) || e.en.toLowerCase().includes(q)).slice(0, 7)) {
+    for (const e of searchIndex().filter((e) => e.ar.includes(q) || e.en.toLowerCase().includes(q)).slice(0, 7)) {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'pop-item';
       b.innerHTML = `<span class="pop-name">${e.ar}</span><span class="pop-sub">${e.kind} · ${e.en}</span>`;
@@ -648,12 +714,12 @@ function updateHud(dt, fps) {
   $('hud-altitude').textContent = toArabicDigits(Math.round(player.mode === 'heli' ? player.alt : 612));
   $('hud-alt-label').textContent = player.mode === 'heli' ? 'الارتفاع' : 'فوق سطح البحر';
   const d = G.districtAt(player.pos.x, player.pos.z);
-  const r = G.roadAt(player.pos.x, player.pos.z);
-  const key = (r ? r.name : '') + d.en;
+  const r = roadName(player.pos.x, player.pos.z);
+  const key = (r ? r.ar : '') + d.en;
   if (key !== lastLoc) {
     lastLoc = key;
     $('sign-ar').textContent = r ? r.ar : 'حي ' + d.ar;
-    $('sign-en').textContent = r ? r.name : d.en;
+    $('sign-en').textContent = r ? (r.en || d.en) : d.en;
     $('sign-district').textContent = r ? 'حي ' + d.ar : 'الرياض';
   }
   $('hud-fps').textContent = toArabicDigits(Math.round(fps));
@@ -664,7 +730,7 @@ function updateHud(dt, fps) {
 
 // ---------- main loop ----------
 const clock = new THREE.Clock();
-let fpsAvg = 60, slowT = 0, detailR = touch ? 1500 : 2200;
+let fpsAvg = 60, slowT = 0, detailR = touch ? 1000 : 1500, farR = touch ? 5000 : 8000;
 function frame() {
   const dt = Math.min(0.05, clock.getDelta());
   fpsAvg += (1 / Math.max(dt, 1e-3) - fpsAvg) * 0.05;
@@ -674,11 +740,10 @@ function frame() {
   updateCamera(dt);
   const scenic = !!SCENIC.find((s) => s.id === camId || (camId === 'drone' && SCENIC[directorIdx].id === s.id));
   const focus = scenic ? camera.position : player.pos;
-  const R = scenic ? detailR : player.mode === 'heli' ? Math.min(3000, detailR + player.alt) : detailR;
-  city.update({ x: focus.x, z: focus.z }, R, 14000, 5);
+  const nearR = scenic ? detailR * 0.8 : player.mode === 'heli' ? Math.min(2600, detailR + player.alt * 0.5) : detailR;
+  world.update({ x: focus.x, z: focus.z }, nearR, farR, 6);
   traffic.update(dt, focus, player.mode === 'car' ? player.pos : null);
   peds.update(dt, focus.x, focus.z, !scenic || camPos.y < 60);
-  metro?.update(dt);
   // shadow camera follows what we are looking at
   const sc = new THREE.Vector3(camLook.x, 0, camLook.z);
   sun.target.position.copy(sc);
@@ -698,7 +763,7 @@ function frame() {
   if (!$('fullmap-modal').hidden) drawAtlas();
   updateHud(dt, fpsAvg);
   // adaptive detail
-  if (fpsAvg < 26) { slowT += dt; if (slowT > 4 && detailR > 1200) { detailR -= 300; slowT = 0; } } else slowT = 0;
+  if (fpsAvg < 26) { slowT += dt; if (slowT > 4 && detailR > 800) { detailR -= 200; farR = Math.max(4000, farR - 1000); slowT = 0; } } else slowT = 0;
   requestAnimationFrame(frame);
 }
 
@@ -714,9 +779,15 @@ async function boot() {
     status('تجهيز الأجواء والسماء…', 0.05);
     applyPreset('maghrib');
     await nextFrame();
-    status('بناء المعالم: برج المملكة، الفيصلية، المصمك…', 0.15);
+    status('تحميل خريطة الرياض من OpenStreetMap…', 0.08);
+    osm = await new OSM().load('./data/', (f) => status('تحميل خريطة الرياض من OpenStreetMap…', 0.08 + f * 0.3));
+    status(`فهرسة ${toArabicDigits(osm.nRoads)} طريق و${toArabicDigits(osm.nBld)} مبنى…`, 0.4);
+    await nextFrame();
+    world = new World(scene, osm);
+    traffic = new Cars(scene, osm, touch ? 110 : 170);
+    player.osm = osm;
+    status('بناء المعالم: برج المملكة، الفيصلية، المصمك…', 0.45);
     buildLandmarks(scene);
-    metro = buildMetro(scene);
     await nextFrame();
     buildMenus();
     setMode('car');
@@ -724,9 +795,9 @@ async function boot() {
     setCamera('chase');
     updateCamera(1);
     // stream the first rings of the city before showing it
-    for (let i = 0; i < 400; i++) {
-      const left = city.update(player.pos, detailR, 14000, 40);
-      status(`بناء الأحياء والشوارع… ${toArabicDigits(city.stats.detail + city.stats.coarse)} قطعة`, 0.2 + 0.75 * Math.min(1, i / Math.max(1, i + left)));
+    for (let i = 0; i < 600; i++) {
+      const left = world.update(player.pos, detailR, Math.min(farR, 3500), 45);
+      status(`بناء الأحياء والشوارع… ${toArabicDigits(world.stats.chunks)} كم²`, 0.5 + 0.45 * Math.min(1, i / Math.max(1, i + left)));
       await nextFrame();
       if (left === 0) break;
     }
@@ -744,4 +815,4 @@ async function boot() {
   }
 }
 boot();
-window.__riyadh = { scene, camera, player, city, traffic, applyPreset, setCamera, setMode, teleport: (i) => teleport(TELEPORTS[i]), renderer };
+window.__riyadh = { scene, camera, player, get world() { return world; }, get osm() { return osm; }, get traffic() { return traffic; }, applyPreset, setCamera, setMode, teleport: (i) => teleport(TELEPORTS[i]), renderer };

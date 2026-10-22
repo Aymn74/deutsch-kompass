@@ -1,6 +1,7 @@
 // player.js — the three ways to get around: on foot (thobe & shemagh), a white Land Cruiser, a helicopter.
 import * as THREE from 'three';
-import { walkable, drivable, TH } from './geo.js';
+import { TH } from './geo.js';
+import { F } from './osm.js';
 import { buildCarGeometry, makeCarMaterial } from './traffic.js';
 import { LANDMARK_COLLIDERS } from './landmarks.js';
 
@@ -118,6 +119,8 @@ export class Player {
     this.steer = 0;
     this.walkPhase = 0;
     this.mode = 'car';
+    this.gy = 0;
+    this.osm = null;
     this.setMode('car');
   }
   get modeInfo() { return MODES[this.mode]; }
@@ -134,12 +137,27 @@ export class Player {
     this.pos.set(x, 0, z);
     if (yaw !== undefined) this.yaw = yaw;
     this.speed = 0;
+    this.gy = 0;
     if (this.mode === 'heli') this.alt = 160;
     this.unstick();
   }
   canStand(x, z) {
     for (const c of LANDMARK_COLLIDERS) if ((x - c.x) ** 2 + (z - c.z) ** 2 < c.r * c.r) return false;
-    return this.mode === 'person' ? walkable(x, z) : drivable(x, z);
+    if (!this.osm) return true;
+    // on a bridge deck nothing below matters
+    if (this.gy > 2) return true;
+    return !this.osm.insideBuilding(x, z, this.mode === 'car' ? 1.2 : 0.3);
+  }
+  // follow bridge decks when already near their height, otherwise stay on the ground
+  groundAt(x, z) {
+    if (!this.osm) return 0;
+    const osm = this.osm;
+    const hit = osm.nearestRoad(x, z, 3, (r) => osm.flags(r) & F.bridge);
+    if (hit && hit.dist < 0.5) {
+      const y = osm.roadY(hit.road, hit.along) + 0.12;
+      if (Math.abs(y - this.gy) < 2.5) return y;
+    }
+    return 0;
   }
   // after a teleport/mode change, walk outwards in a spiral until the spot is free
   unstick() {
@@ -166,7 +184,8 @@ export class Player {
       const m = this.models.person;
       const sw = Math.sin(this.walkPhase) * Math.min(1, Math.abs(this.speed) / 3);
       m.userData.armL.rotation.z = sw * 0.5; m.userData.armR.rotation.z = -sw * 0.5;
-      m.position.set(p.x, this.alt + Math.abs(Math.sin(this.walkPhase)) * 0.04 * Math.min(1, Math.abs(this.speed)), p.z);
+      this.gy = this.groundAt(p.x, p.z);
+      m.position.set(p.x, this.gy + this.alt + Math.abs(Math.sin(this.walkPhase)) * 0.04 * Math.min(1, Math.abs(this.speed)), p.z);
       m.rotation.set(0, this.yaw, 0);
     } else if (this.mode === 'car') {
       const maxV = boost ? 52 : 33;
@@ -177,10 +196,11 @@ export class Player {
       const grip = Math.min(1, Math.abs(this.speed) / 6);
       this.yaw += this.steer * dt * 1.7 * grip * Math.sign(this.speed || 1) * (1 - Math.min(0.55, Math.abs(this.speed) / 90));
       // traffic contact: bump to a halt
-      if (traffic) for (const h of traffic.nearby(p.x, p.z, 3.6)) if (Math.abs(h.along) < 4.2 && Math.abs(h.across) < 2.0) { this.speed *= -0.25; h.car.v = 0; break; }
+      if (traffic) for (const c of traffic.nearby(p.x, p.z, 5)) { const dx = c.wx - p.x, dz = c.wz - p.z; const al = dx * c.ux + dz * c.uz, ac = -dx * c.uz + dz * c.ux; if (Math.abs(al) < 4.4 && Math.abs(ac) < 2.0) { this.speed *= -0.25; c.v = 0; break; } }
       this.move(dt);
       const m = this.models.car;
-      m.position.set(p.x, 0, p.z);
+      this.gy = this.groundAt(p.x, p.z);
+      m.position.set(p.x, this.gy, p.z);
       m.rotation.set(0, this.yaw, -this.steer * Math.min(1, Math.abs(this.speed) / 30) * 0.05);
     } else {
       const maxV = boost ? 95 : 48;
@@ -208,5 +228,5 @@ export class Player {
     if (this.canStand(p.x, p.z + dz)) { p.z += dz; this.speed *= 0.92; return; }
     this.speed *= this.mode === 'car' ? -0.2 : 0;
   }
-  get height() { return this.mode === 'heli' ? this.alt : this.mode === 'car' ? 1.3 : 1.6 + this.alt; }
+  get height() { return this.mode === 'heli' ? this.alt : this.gy + (this.mode === 'car' ? 1.3 : 1.6 + this.alt); }
 }

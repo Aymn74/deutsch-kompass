@@ -47,7 +47,7 @@ export function rng(seed) {
 }
 
 // ---------- the built-up area (approximate urban footprint used by the generator) ----------
-const MASK = { lat0: 24.585, lat1: 24.835, lon0: 46.585, lon1: 46.82 };
+const MASK = { lat0: 24.52, lat1: 24.915, lon0: 46.306, lon1: 46.964 };
 const m0 = geo(MASK.lat1, MASK.lon0), m1 = geo(MASK.lat0, MASK.lon1);
 export const MASK_WORLD = { x0: m0.x, z0: m0.z, x1: m1.x, z1: m1.z };
 export function inMask(x, z) {
@@ -107,21 +107,22 @@ const ROAD_MAKKAH = ROADS_V.find((r) => r.name.startsWith('Makkah'));
 const ROAD_NRR = ROADS_V.find((r) => r.name === 'Northern Ring Rd');
 
 // ---------- places ----------
+// positions from OpenStreetMap (building centroids)
 export const PLACES = {
-  kingdom: { lat: 24.7114, lon: 46.6744, ar: 'برج المملكة', en: 'Kingdom Centre' },
-  faisaliah: { lat: 24.6903, lon: 46.6853, ar: 'برج الفيصلية', en: 'Al Faisaliah Tower' },
-  kafd: { lat: 24.7637, lon: 46.6405, ar: 'مركز الملك عبدالله المالي', en: 'KAFD' },
-  rafal: { lat: 24.7930, lon: 46.6318, ar: 'برج رافال', en: 'Burj Rafal' },
-  masmak: { lat: 24.6312, lon: 46.7133, ar: 'قصر المصمك', en: 'Masmak Fortress' },
-  museum: { lat: 24.6478, lon: 46.7107, ar: 'المتحف الوطني', en: 'National Museum' },
-  water: { lat: 24.6640, lon: 46.7135, ar: 'برج المياه', en: 'Riyadh Water Tower' },
-  tv: { lat: 24.6612, lon: 46.6640, ar: 'برج التلفزيون', en: 'Riyadh TV Tower' },
-  moi: { lat: 24.6668, lon: 46.7225, ar: 'وزارة الداخلية', en: 'Ministry of Interior' },
-  library: { lat: 24.6858, lon: 46.6862, ar: 'مكتبة الملك فهد الوطنية', en: 'King Fahd National Library' },
-  turaif: { lat: 24.7339, lon: 46.5753, ar: 'حي الطريف · الدرعية', en: 'At-Turaif, Diriyah' },
-  tahlia: { lat: 24.6985, lon: 46.6850, ar: 'شارع التحلية', en: 'Tahlia Street' },
-  malazPark: { lat: 24.6650, lon: 46.7370, ar: 'حديقة الملك عبدالله', en: 'King Abdullah Park' },
-  salam: { lat: 24.6280, lon: 46.7055, ar: 'منتزه السلام', en: 'Salam Park' }
+  kingdom: { lat: 24.71133, lon: 46.67441, ar: 'برج المملكة', en: 'Kingdom Centre' },
+  faisaliah: { lat: 24.69031, lon: 46.68457, ar: 'برج الفيصلية', en: 'Al Faisaliah Tower' },
+  kafd: { lat: 24.76368, lon: 46.64149, ar: 'المركز المالي (كافد)', en: 'KAFD · PIF Tower' },
+  rafal: { lat: 24.7924, lon: 46.63235, ar: 'برج رافال', en: 'Burj Rafal' },
+  masmak: { lat: 24.63122, lon: 46.71336, ar: 'قصر المصمك', en: 'Masmak Fortress' },
+  museum: { lat: 24.64735, lon: 46.71068, ar: 'المتحف الوطني', en: 'National Museum' },
+  water: { lat: 24.64511, lon: 46.71227, ar: 'برج مياه الرياض', en: 'Riyadh Water Tower' },
+  tv: { lat: 24.64322, lon: 46.69601, ar: 'برج التلفزيون', en: 'Riyadh TV Tower' },
+  moi: { lat: 24.67033, lon: 46.69574, ar: 'وزارة الداخلية', en: 'Ministry of Interior' },
+  library: { lat: 24.68531, lon: 46.68737, ar: 'مكتبة الملك فهد الوطنية', en: 'King Fahd National Library' },
+  turaif: { lat: 24.7329, lon: 46.57328, ar: 'حي الطريف · الدرعية', en: 'At-Turaif, Diriyah' },
+  tahlia: { lat: 24.6985, lon: 46.6880, ar: 'شارع التحلية', en: 'Tahlia Street' },
+  malazPark: { lat: 24.66665, lon: 46.73705, ar: 'منتزه الملك عبدالله', en: 'King Abdullah Park' },
+  salam: { lat: 24.62185, lon: 46.70832, ar: 'حديقة السلام', en: 'Salam Park' }
 };
 for (const p of Object.values(PLACES)) Object.assign(p, geo(p.lat, p.lon), gridOf(p.lat, p.lon));
 

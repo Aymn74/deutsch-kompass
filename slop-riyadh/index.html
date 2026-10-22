@@ -4,7 +4,7 @@
 </head><body>
 <title>Slop Riyadh</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="محاكاة ثلاثية الأبعاد لمدينة الرياض مبنية بـ three.js: طريق الملك فهد، برج المملكة، الفيصلية، كافد، المصمك والدرعية — مشيًا أو بالسيارة أو بالهليكوبتر.">
+<meta name="description" content="محاكاة ثلاثية الأبعاد لمدينة الرياض مبنية بـ three.js من بيانات OpenStreetMap: شوارع ومبانٍ حقيقية، برج المملكة، الفيصلية، كافد، المصمك والدرعية.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Reem+Kufi:wght@600;700&family=IBM+Plex+Mono:wght@500&display=swap">
@@ -59,6 +59,8 @@ body.hud-hidden .brand, body.hud-hidden .hud-bottom { opacity: 0; visibility: hi
 .brand h1 { margin: 0; font-family: var(--f-display); font-size: 22px; font-weight: 700; line-height: 1.1; }
 .brand h1 span { color: var(--sand); }
 .brand-subtitle { font-family: var(--f-data); font-size: 11px; color: var(--muted); direction: ltr; text-align: right; margin-top: 3px; }
+.osm-credit { display: block; font-family: var(--f-data); font-size: 10.5px; color: var(--muted); direction: ltr; text-align: right; margin-top: 2px; text-decoration: none; }
+.osm-credit:hover { color: var(--ink); text-decoration: underline; }
 .fps-ok { color: #8fe0b0; } .fps-mid { color: var(--sand); } .fps-low { color: #ff9c8a; }
 
 .toolbar { display: flex; align-items: center; gap: 4px; padding: 5px; flex-wrap: wrap; justify-content: flex-end; }
@@ -214,6 +216,7 @@ body.hud-hidden .icon-hide { display: none; } body.hud-hidden .icon-show { displ
         <div>
           <h1>سلوب <span>الرياض</span></h1>
           <div class="brand-subtitle">three.js · WebGL · <span id="hud-fps" class="fps-ok">٦٠</span> fps</div>
+          <a class="osm-credit" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a>
         </div>
       </header>
       <div class="panel toolbar keep" id="hud-toolbar">

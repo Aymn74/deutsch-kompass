@@ -5,20 +5,31 @@ Walk, drive a white Land Cruiser, or fly a helicopter along King Fahd Road, Olay
 
 Open `index.html` through any static server (for example `npx serve slop-riyadh`). GitHub Pages works too.
 
-## What is real and what is generated
+## Data
 
-- **Real positions (approximate):** the main arterials, ring roads and landmarks are placed from latitude/longitude
-  (Kingdom Centre, Al Faisaliah, KAFD, Burj Rafal, Masmak, National Museum, Water Tower, TV Tower, Ministry of Interior,
-  King Fahd National Library, At-Turaif, Wadi Hanifa). Every arterial is drawn as a straight line on Riyadh's grid,
-  which runs about 28° west of north.
-- **Generated:** local streets, villas, apartments, shop strips, towers, mosques and parks are generated
-  deterministically per district (`js/geo.js`, `js/city.js`). OpenStreetMap could not be downloaded when this was built;
-  replacing the generator with OSM footprints is the natural next step.
+Streets, buildings, parks, water and the metro come from OpenStreetMap (© OpenStreetMap contributors, ODbL),
+extracted with BBBike as a GeoPackage and converted by `tools/build_osm.py`:
+
+```
+python3 -I tools/build_osm.py riyadh.gpkg data/
+for f in data/*.bin; do base64 -w 0 "$f" > "${f%.bin}.b64.txt"; done   # the page loads the base64 text files
+```
+
+- 92,656 road ways with names (Arabic and English), lanes, one-way, bridges and tunnels.
+- 89,040 building footprints. Few carry a height in OSM, so heights are estimated from the building type,
+  footprint size and location (towers along King Fahd Road and in KAFD).
+- 412,300 generated villa, shop and apartment plots fill districts where streets are mapped but buildings are not.
+  They are placed only along real residential streets, on land left free by mapped buildings, roads and parks.
+- Kingdom Centre, Al Faisaliah, PIF Tower, Burj Rafal, Masmak, the Water Tower, the TV Tower, the Ministry of
+  Interior and At-Turaif are hand-built models placed at their OSM positions.
 
 ## Files
 
-- `js/geo.js`: coordinate frame, road network, districts, block layout, walk/drive rules
-- `js/city.js`: chunk streaming (detail near the player, coarse silhouette to the horizon)
+- `js/osm.js`: loads the OSM data, spatial grid, nearest-road and inside-building queries
+- `js/world.js`: builds 1 km chunks: road ribbons, pavements, extruded buildings, land use, infill, lamps, palms
+- `js/cars.js`: traffic following the real road network
+- `js/geo.js`: coordinate frame, landmark positions, districts
+- `js/city.js`: instancing helpers (and the older procedural generator)
 - `js/materials.js`: procedural facade shader (windows, shopfronts, night lights), ground, sky, palms
 - `js/landmarks.js`: hand-built landmarks and the Metro Line 1 viaduct
 - `js/traffic.js`: lane-following traffic with signals, car models

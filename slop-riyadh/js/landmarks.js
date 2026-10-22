@@ -1,6 +1,6 @@
 // landmarks.js — hand-built icons of the Riyadh skyline and old town.
 import * as THREE from 'three';
-import { PLACES, TH, toWorld, rng, ROAD_OLAYA, ROADS_V } from './geo.js';
+import { PLACES, TH, rng } from './geo.js';
 import { ST, U, makeBuildingMaterial, nightGlow } from './materials.js';
 import { Sink, boxGeo, capGeo, domeGeo, palm, domeMat, capMat } from './city.js';
 import { palmTrunkMat, palmCrownMat } from './materials.js';
@@ -136,56 +136,8 @@ function kafd() {
   const crownLed = new THREE.Mesh(styled(new THREE.CylinderGeometry(21.6, 21.6, 1.2, 8, 1, true).rotateY(Math.PI / 8), ST.led, 0.8), bmat('#ffffff'));
   crownLed.position.y = 350;
   g.add(crownLed);
-  // ring of signature towers
-  const shapes = [];
-  for (let i = 0; i < 17; i++) {
-    const a = (i / 17) * Math.PI * 2 + R() * 0.25;
-    const r = 120 + R() * 260;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const h = 110 + Math.pow(R(), 1.2) * 190;
-    const kind = i % 4;
-    const color = ['#6f8ea3', '#8aa0a8', '#5b7a8c', '#a7a89a', '#6b8a7f', '#8b8070'][i % 6];
-    const seed = R();
-    if (kind === 0) {
-      // twisting tower: stacked plates, each turned a little
-      const n = Math.round(h / 8);
-      for (let s = 0; s < n; s++) {
-        const p = mesh(new THREE.BoxGeometry(30, 8.05, 30), ST.glass, color, seed);
-        p.position.set(x, s * 8 + 4, z);
-        p.rotation.y = s * (Math.PI / 2 / n);
-        g.add(p);
-      }
-    } else if (kind === 1) {
-      g.add(mesh(new THREE.CylinderGeometry(16, 20, h, 12).translate(x, h / 2, z), ST.glass, color, seed));
-      g.add(mesh(new THREE.CylinderGeometry(9, 16, 18, 12).translate(x, h + 9, z), ST.plain, '#c0c8cc'));
-    } else if (kind === 2) {
-      const w = 26 + R() * 14;
-      const t = mesh(new THREE.BoxGeometry(w, h, w * 0.7).translate(0, h / 2, 0), ST.glass, color, seed);
-      t.position.set(x, 0, z); t.rotation.y = R() * Math.PI;
-      g.add(t);
-      shapes.push(t);
-    } else {
-      const sh = new THREE.Shape();
-      sh.moveTo(-18, 0); sh.lineTo(18, 0); sh.lineTo(18, h * 0.86); sh.lineTo(-18, h); sh.lineTo(-18, 0);
-      const ge = new THREE.ExtrudeGeometry(sh, { depth: 26, bevelEnabled: false }).translate(0, 0, -13);
-      const t = mesh(ge, ST.glass, color, seed);
-      t.position.set(x, 0, z); t.rotation.y = R() * Math.PI;
-      g.add(t);
-    }
-  }
-  // KAFD Grand Mosque (angular, pale stone)
-  g.add(mesh(new THREE.BoxGeometry(46, 16, 46).translate(-210, 8, 150), ST.mosque, '#e6dfd0', 0.4));
-  g.add(mesh(new THREE.BoxGeometry(5, 46, 5).translate(-182, 23, 122), ST.plain, '#e6dfd0'));
-  // elevated monorail loop
-  const loop = new THREE.Mesh(styled(new THREE.TorusGeometry(300, 2.6, 6, 120).rotateX(Math.PI / 2), ST.plain), bmat('#d7dadc'));
-  loop.position.y = 18;
-  g.add(loop);
   const sink = localSink();
-  for (let i = 0; i < 48; i++) {
-    const a = (i / 48) * Math.PI * 2;
-    sink.boxes.boxW(Math.cos(a) * 300, Math.sin(a) * 300, 2.2, 2.2, 0, 16, 0, new THREE.Color('#cfd2d4'), ST.plain);
-  }
-  for (let i = 0; i < 90; i++) { const a = R() * Math.PI * 2, r = 60 + R() * 380; sinkPalmLocal(sink, Math.cos(a) * r, Math.sin(a) * r, 9 + R() * 4, R); }
+  for (let i = 0; i < 24; i++) { const a = R() * Math.PI * 2, r = 50 + R() * 40; sinkPalmLocal(sink, Math.cos(a) * r, Math.sin(a) * r, 9 + R() * 4, R); }
   sinkMeshes(sink, g, bmat('#ffffff'));
   return g;
 }
@@ -410,62 +362,13 @@ function tuwaiq() {
   return m;
 }
 
-// ---------- Riyadh Metro Line 1 (Blue) viaduct along Olaya St, north section ----------
-export function buildMetro(scene) {
-  const g = new THREE.Group();
-  const sink = localSink();
-  const u = ROAD_OLAYA.c;
-  const v0 = ROADS_V.find((r) => r.name === 'King Abdullah Rd').c + 80, v1 = ROADS_V.find((r) => r.name === 'King Salman Rd').c - 120;
-  const deck = new THREE.Color('#d9d6cf');
-  for (let v = v0; v < v1; v += 34) sink.boxes.box(u, v, 2.6, 2.6, 0, 12, deck, ST.plain);
-  sink.boxes.box(u, (v0 + v1) / 2, 9, v1 - v0, 12, 2.2, deck, ST.plain);
-  const stations = [];
-  for (let v = v0 + 500; v < v1 - 200; v += 1500) {
-    stations.push(v);
-    sink.boxes.box(u, v, 26, 120, 14.2, 0.4, new THREE.Color('#c9c4b8'), ST.slab);
-    sink.boxes.box(u, v, 28, 124, 21, 1.2, new THREE.Color('#e4e0d6'), ST.plain);
-    for (const s of [-1, 1]) sink.boxes.box(u + s * 12.5, v, 1, 120, 14.2, 6.8, new THREE.Color('#8fb3c7'), ST.glass, 0.3);
-    sink.boxes.box(u, v, 28.2, 4, 18.5, 1.4, new THREE.Color('#1f6fd1'), ST.sign);
-  }
-  sinkMeshes(sink, g, bmat('#ffffff'));
-  scene.add(g);
-  // the train: four white cars with a blue stripe
-  const train = new THREE.Group();
-  const carGeo = new THREE.BoxGeometry(3, 3.6, 21).translate(0, 1.8, 0);
-  for (let k = 0; k < 4; k++) {
-    const c = new THREE.Mesh(carGeo, new THREE.MeshStandardMaterial({ color: '#f1f3f5', roughness: 0.35, metalness: 0.3 }));
-    c.position.z = k * 21.6 - 32;
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(3.05, 0.6, 21), nightGlow('#1f6fd1', 0.1, 1.2));
-    stripe.position.set(0, 1.0, c.position.z);
-    const win = new THREE.Mesh(new THREE.BoxGeometry(3.06, 1.1, 19), nightGlow('#1d2a33', 0.0, 0.0));
-    win.position.set(0, 2.5, c.position.z);
-    train.add(c, stripe, win);
-    c.castShadow = true;
-  }
-  scene.add(train);
-  let s = 0, dir = 1, dwell = 0;
-  const L = v1 - v0 - 60;
-  return {
-    update(dt) {
-      if (dwell > 0) { dwell -= dt; return; }
-      const prev = s;
-      s += dir * 22 * dt;
-      for (const st of stations) if ((prev - (st - v0)) * (s - (st - v0)) < 0) { dwell = 12; s = st - v0; }
-      if (s > L) { s = L; dir = -1; dwell = 15; }
-      if (s < 0) { s = 0; dir = 1; dwell = 15; }
-      const w = toWorld(u + dir * 1.8, v0 + 30 + s);
-      train.position.set(w.x, 14.4, w.z);
-      train.rotation.y = TH + Math.PI / 2 + (dir > 0 ? 0 : Math.PI) + Math.PI / 2;
-    }
-  };
-}
-
 export function buildLandmarks(scene) {
-  const list = [kingdomCentre(), faisaliah(), kafd(), rafal(), masmak(), museum(), waterTower(), tvTower(), moi(), library(), turaif(), wadiGroves(), tuwaiq()];
+  // the National Museum, King Fahd Library and the KAFD towers come from OpenStreetMap footprints
+  const list = [kingdomCentre(), faisaliah(), kafd(), rafal(), masmak(), waterTower(), tvTower(), moi(), turaif(), wadiGroves(), tuwaiq()];
   for (const o of list) scene.add(o);
   return list;
 }
 // Colliders for walking/driving (world circles)
 export const LANDMARK_COLLIDERS = [
-  ['kingdom', 62], ['faisaliah', 34], ['rafal', 30], ['masmak', 36], ['water', 6], ['tv', 9], ['moi', 30], ['library', 62]
+  ['kingdom', 62], ['faisaliah', 34], ['rafal', 30], ['masmak', 36], ['water', 6], ['tv', 9], ['moi', 30], ['kafd', 30]
 ].map(([k, r]) => ({ x: PLACES[k].x, z: PLACES[k].z, r }));

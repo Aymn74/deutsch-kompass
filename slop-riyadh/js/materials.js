@@ -21,6 +21,7 @@ const HEAD = /* glsl */`
 uniform float uNight; uniform float uTime; uniform vec2 uFocus; uniform float uDetailR; uniform float uDust;
 varying vec3 vWP; varying vec3 vWN; flat varying float vStyle; flat varying float vSeed;
 varying vec3 vLP; varying vec3 vLN; flat varying vec3 vScl;
+varying float vFacX; flat varying vec3 vFacC;
 float h21(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
 float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
   return mix(mix(h21(i), h21(i+vec2(1,0)), f.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), f.x), f.y); }
@@ -45,6 +46,8 @@ const FACADE = /* glsl */`
   } else {
     vec2 tg = normalize(vec2(-n.z, n.x)); hc = dot(vWP.xz, tg) + 5000.0; W = 1e5; yb = vWP.y; H = 1e5; dE2 = 1e3;
   }
+  // extruded OSM footprints carry their wall coordinates as an attribute
+  if (vFacC.x > 0.0) { loc = true; hc = vFacX; W = vFacC.x; H = vFacC.y; yb = vWP.y - vFacC.z; dE2 = 1e3; }
   float dE = min(hc, W - hc);
   float dTop = H - yb;
   float seedA = h21(vec2(vSeed * 91.0, 3.7));
@@ -206,16 +209,23 @@ const FACADE = /* glsl */`
   }
   }`;
 
-export function makeBuildingMaterial({ coarse = false, always = false } = {}) {
-  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86, metalness: 0.0 });
+export function makeBuildingMaterial({ coarse = false, always = false, fac = false } = {}) {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86, metalness: 0.0, vertexColors: fac });
+  if (fac) m.defines = { FAC: '' };
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, U);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 attribute float aStyle; attribute float aSeed;
+#ifdef FAC
+attribute vec4 aFac;
+#endif
 ${HEAD}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-  vLP = position; vLN = normal; vScl = vec3(0.0);
+  vLP = position; vLN = normal; vScl = vec3(0.0); vFacX = 0.0; vFacC = vec3(0.0);
+#ifdef FAC
+  vFacX = aFac.x; vFacC = aFac.yzw;
+#endif
 #ifdef USE_INSTANCING
   vScl = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
   float dFocus = distance(instanceMatrix[3].xz, uFocus);
@@ -242,7 +252,7 @@ ${FACADE}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
   totalEmissiveRadiance += gEmis;`);
   };
-  m.customProgramCacheKey = () => 'bld2' + (always ? 'A' : coarse ? 'C' : 'D');
+  m.customProgramCacheKey = () => 'bld3' + (always ? 'A' : coarse ? 'C' : 'D') + (fac ? 'F' : '');
   return m;
 }
 
@@ -278,9 +288,9 @@ float n2(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
     vec2 p = vGP.xz;
     float inside = ${asphalt ? '1.0' : 'step(uMask.x, p.x) * step(p.x, uMask.z) * step(uMask.y, p.y) * step(p.y, uMask.w)'};
     float grain = n2(p * 0.35) * 0.5 + n2(p * 2.1) * 0.5;
-    vec3 asphalt = mix(vec3(0.052, 0.05, 0.048), vec3(0.075, 0.072, 0.068), grain);
-    asphalt *= 0.9 + 0.14 * n2(p * 0.05) + 0.05 * n2(p * 9.0);   // patches and aggregate
-    asphalt = mix(asphalt, vec3(0.032, 0.031, 0.03), smoothstep(0.75, 0.95, n2(p * 0.02 + 3.0)) * 0.5);  // oil and repairs
+    vec3 asphalt = mix(vec3(0.34, 0.27, 0.19), vec3(0.42, 0.34, 0.25), grain);   // compacted urban sand
+    asphalt *= 0.88 + 0.16 * n2(p * 0.03) + 0.05 * n2(p * 9.0);
+    asphalt = mix(asphalt, vec3(0.27, 0.24, 0.2), smoothstep(0.6, 0.9, n2(p * 0.012 + 3.0)) * 0.6);  // gravel patches
     float dune = n2(p * 0.0021) * 0.6 + n2(p * 0.011) * 0.3 + n2(p * 0.09) * 0.1;
     vec3 sand = mix(vec3(0.74, 0.60, 0.42), vec3(0.86, 0.72, 0.52), dune);
     sand = mix(sand, vec3(0.62, 0.52, 0.40), smoothstep(0.62, 0.8, n2(p * 0.004 + 9.0)) * 0.6);
@@ -392,3 +402,99 @@ void main() {
 }`
 });
 export const poolGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+
+
+// ---------- road surface: asphalt with lane markings, edge lines and zebra crossings drawn from attributes ----------
+// aRoad = (across m, along m, half width, lanes per direction); aRoad2 = (way length, cls + 16 * flags)
+export function makeRoadMaterial() {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0 });
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aRoad; attribute vec2 aRoad2; varying vec4 vRoad; flat varying vec2 vRoad2; varying vec3 vRP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRoad = aRoad; vRoad2 = aRoad2; vRP = (modelMatrix * vec4(position, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec4 vRoad; flat varying vec2 vRoad2; varying vec3 vRP; uniform float uNight;
+float rh(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+float rn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+  return mix(mix(rh(i), rh(i+vec2(1,0)), f.x), mix(rh(i+vec2(0,1)), rh(i+vec2(1,1)), f.x), f.y); }
+float line(float x, float w) { float fw = max(fwidth(x), 1e-3); return 1.0 - smoothstep(w - fw, w + fw, abs(x)); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+  {
+    float across = vRoad.x, along = vRoad.y, hw = vRoad.z, lanes = max(1.0, vRoad.w), L = vRoad2.x;
+    float cls = mod(vRoad2.y, 16.0), flags = floor(vRoad2.y / 16.0);
+    bool oneway = mod(flags, 2.0) > 0.5;
+    float g = rn(vRP.xz * 0.6) * 0.5 + rn(vRP.xz * 3.1) * 0.5;
+    vec3 asph = mix(vec3(0.045, 0.043, 0.041), vec3(0.07, 0.067, 0.063), g);
+    if (cls >= 5.0 && cls != 9.0 && cls != 10.0) asph *= 1.25;                     // dusty local streets
+    // wheel tracks and edge dust
+    asph *= 1.0 - 0.12 * smoothstep(0.7, 0.98, rn(vec2(across * 0.9, along * 0.02)));
+    asph = mix(asph, vec3(0.2, 0.17, 0.13), smoothstep(hw - 0.9, hw, abs(across)) * 0.45);
+    float paint = 0.0; vec3 pc = vec3(0.78, 0.77, 0.72);
+    bool marked = cls <= 4.0 || cls == 9.0 || cls == 10.0;
+    float inner = step(9.0, along) * step(along, L - 9.0);
+    if (marked) {
+      float dash = step(fract(along / 9.0), 0.42);
+      if (oneway) {
+        float lw = 2.0 * hw / lanes;
+        for (int k = 1; k < 6; k++) { if (float(k) >= lanes) break; paint = max(paint, line(across + hw - float(k) * lw, 0.07) * dash * inner); }
+        float yl = line(across + hw - 0.4, 0.08);
+        paint = max(paint, yl);
+        pc = mix(pc, vec3(0.72, 0.52, 0.08), yl);
+        paint = max(paint, line(across - hw + 0.4, 0.08));
+      } else {
+        float lw = hw / lanes;
+        paint = max(paint, line(across, 0.07) * (cls <= 3.0 ? 1.0 : dash) * inner);
+        for (int k = 1; k < 4; k++) { if (float(k) >= lanes) break; paint = max(paint, line(abs(across) - float(k) * lw, 0.07) * dash * inner); }
+        paint = max(paint, line(abs(across) - hw + 0.4, 0.08));
+      }
+    }
+    // zebra crossings near the ends of urban streets
+    if (cls >= 2.0 && cls <= 7.0) {
+      float z0 = step(3.0, along) * step(along, 6.5) + step(L - 6.5, along) * step(along, L - 3.0);
+      paint = max(paint, z0 * step(0.5, fract(across / 1.1)) * step(abs(across), hw - 0.6) * step(14.0, L));
+    }
+    paint *= 0.72 + 0.28 * rn(vRP.xz * 1.7);
+    diffuseColor.rgb = mix(asph, pc, paint);
+  }`);
+  };
+  m.customProgramCacheKey = () => 'road1';
+  return m;
+}
+// pavements beside the carriageway; aRoad.x = across, aRoad.z = road half width; cls in aRoad2.y
+export function makeWalkMaterial() {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aRoad; attribute vec2 aRoad2; varying vec4 vRoad; flat varying vec2 vRoad2; varying vec3 vRP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRoad = aRoad; vRoad2 = aRoad2; vRP = (modelMatrix * vec4(position, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec4 vRoad; flat varying vec2 vRoad2; varying vec3 vRP;
+float wh(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+  {
+    float a = abs(vRoad.x) - vRoad.z;     // metres beyond the carriageway edge
+    float cls = mod(vRoad2.y, 16.0);
+    vec2 tl = fract(vRP.xz * 1.4);
+    float joint = step(0.92, max(tl.x, tl.y));
+    vec3 pav = vec3(0.5, 0.45, 0.38) * (0.92 + 0.12 * wh(floor(vRP.xz * 1.4))) * (1.0 - joint * 0.1);
+    vec3 kerb = cls <= 3.0 ? mix(vec3(0.05), vec3(0.6, 0.45, 0.1), step(0.5, fract(vRoad.y * 0.5))) : vec3(0.55, 0.54, 0.51);
+    diffuseColor.rgb = mix(pav, kerb, step(a, 0.35));
+  }`);
+  };
+  m.customProgramCacheKey = () => 'walk1';
+  return m;
+}
+const LAND_COL = { 1: '#5f7f38', 2: '#4f8445', 3: '#6b7238', 4: '#3d5a2a', 5: '#9a8a5e', 6: '#2f5f6e', 7: '#cfb68c', 8: '#b6a58a' };
+export function landColor(k) { return new THREE.Color(LAND_COL[k] || '#888'); }
+export function makeLandMaterial() {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, vertexColors: true });
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vLPw;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvLPw = (modelMatrix * vec4(position, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vLPw;
+float lh(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+float ln(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f); return mix(mix(lh(i), lh(i+vec2(1,0)), f.x), mix(lh(i+vec2(0,1)), lh(i+vec2(1,1)), f.x), f.y); }`)
+      .replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.rgb *= 0.8 + 0.3 * ln(vLPw.xz * 0.35) * ln(vLPw.xz * 3.0 + 5.0);');
+  };
+  m.customProgramCacheKey = () => 'land1';
+  return m;
+}
