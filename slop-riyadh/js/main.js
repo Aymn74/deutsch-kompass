@@ -20,7 +20,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
 
 // ---------- renderer & scene ----------
 const touch = matchMedia('(pointer: coarse)').matches;
-const renderer = new THREE.WebGLRenderer({ antialias: !touch, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, touch ? 1.5 : 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -54,6 +54,7 @@ scene.add(sun, sun.target);
 
 // ground and the arterial carriageways (they run on into the desert)
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(90000, 90000).rotateX(-Math.PI / 2), makeGroundMaterial());
+ground.position.y = -0.25;   // a clear gap below pavements and roads
 ground.receiveShadow = true;
 scene.add(ground);
 // ---------- atmosphere presets ----------
@@ -102,13 +103,15 @@ const dust = (() => {
 
 // ---------- post ----------
 let composer = null, bloom = null;
-if (!touch) {
-  // multisampled HDR target keeps edges clean through the post chain
-  const rt = new THREE.WebGLRenderTarget(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: 4 });
+{
+  // multisampled HDR target with a full depth buffer; phones skip the bloom pass
+  const rt = new THREE.WebGLRenderTarget(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: touch ? 2 : 4 });
   composer = new EffectComposer(renderer, rt);
   composer.addPass(new RenderPass(scene, camera));
-  bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.4, 0.5, 0.9);
-  composer.addPass(bloom);
+  if (!touch) {
+    bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.4, 0.5, 0.9);
+    composer.addPass(bloom);
+  }
   composer.addPass(new OutputPass());
   // grade: a touch of contrast and warmth, gentle vignette
   composer.addPass(new ShaderPass({
@@ -236,7 +239,7 @@ const FOLLOW = [
   { id: 'top', ar: 'علوي' }
 ];
 const CAMS = [...FOLLOW, ...SCENIC, { id: 'drone', ar: 'المخرج الآلي' }];
-let camId = 'chase', camT = 0, directorIdx = 0, directorT = 0;
+let camId = 'chase', camT = 0, directorIdx = 0, directorT = 0, lookIdle = 0;
 const orbitCtl = { yaw: 0, pitch: 0.18, zoom: 1 };
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
 function scenicPose(s, t, out, look) {
@@ -251,6 +254,11 @@ function scenicPose(s, t, out, look) {
 }
 function updateCamera(dt) {
   camT += dt;
+  lookIdle += dt;
+  if (lookIdle > 1.5 && Math.abs(player.speed) > 2 && camId !== 'top') {
+    orbitCtl.yaw *= 1 - Math.min(1, dt * 1.2);
+    orbitCtl.pitch += (0.18 - orbitCtl.pitch) * Math.min(1, dt * 0.8);
+  }
   const p = player.pos;
   const fwd = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
   let id = camId;
@@ -339,7 +347,7 @@ function readKeys() {
   el.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') return; drag = { x: e.clientX, y: e.clientY }; el.setPointerCapture(e.pointerId); });
   el.addEventListener('pointermove', (e) => {
     if (!drag) return;
-    orbitCtl.yaw -= (e.clientX - drag.x) * 0.005;
+    orbitCtl.yaw -= (e.clientX - drag.x) * 0.005; lookIdle = 0;
     orbitCtl.pitch = THREE.MathUtils.clamp(orbitCtl.pitch + (e.clientY - drag.y) * 0.004, -0.3, 1.35);
     drag = { x: e.clientX, y: e.clientY };
   });
@@ -376,7 +384,7 @@ if (touch) {
       orbitCtl.zoom = THREE.MathUtils.clamp(orbitCtl.zoom * d0 / Math.max(1, Math.hypot(c.x - d.x, c.y - d.y)), 0.35, 6);
       return;
     }
-    orbitCtl.yaw -= (e.clientX - p.x) * 0.006;
+    orbitCtl.yaw -= (e.clientX - p.x) * 0.006; lookIdle = 0;
     orbitCtl.pitch = THREE.MathUtils.clamp(orbitCtl.pitch + (e.clientY - p.y) * 0.005, -0.3, 1.35);
     p.x = e.clientX; p.y = e.clientY;
   });
@@ -401,6 +409,7 @@ function setMode(m) {
   $('hud-active-mode').textContent = player.modeInfo.label;
   $('hud-controls-hint').textContent = touch ? '' : HINTS[m];
   document.querySelectorAll('.touch-action[data-touch-action="down"]').forEach((b) => (b.hidden = m !== 'heli'));
+  document.querySelectorAll('.touch-action[data-touch-action="up"]').forEach((b) => (b.hidden = m === 'car'));
   const upLabel = document.querySelector('[data-touch-label="up"]'); if (upLabel) upLabel.textContent = m === 'heli' ? 'صعود' : 'قفز';
 }
 // each teleport lands on the nearest big road to a real spot, facing along the traffic
@@ -742,7 +751,7 @@ function frame() {
   const focus = scenic ? camera.position : player.pos;
   const nearR = scenic ? detailR * 0.8 : player.mode === 'heli' ? Math.min(2600, detailR + player.alt * 0.5) : detailR;
   world.update({ x: focus.x, z: focus.z }, nearR, farR, 6);
-  traffic.update(dt, focus, player.mode === 'car' ? player.pos : null);
+  traffic.update(dt, focus, player.mode !== 'heli' && !scenic ? player.pos : null);
   peds.update(dt, focus.x, focus.z, !scenic || camPos.y < 60);
   // shadow camera follows what we are looking at
   const sc = new THREE.Vector3(camLook.x, 0, camLook.z);

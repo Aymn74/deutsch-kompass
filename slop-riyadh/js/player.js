@@ -188,20 +188,30 @@ export class Player {
       m.position.set(p.x, this.gy + this.alt + Math.abs(Math.sin(this.walkPhase)) * 0.04 * Math.min(1, Math.abs(this.speed)), p.z);
       m.rotation.set(0, this.yaw, 0);
     } else if (this.mode === 'car') {
-      const maxV = boost ? 52 : 33;
-      const acc = fwd > 0 ? 7.5 : fwd < 0 ? (this.speed > 0.5 ? -16 : -5) : -this.speed * 0.5;
-      this.speed = THREE.MathUtils.clamp(this.speed + acc * dt, -9, maxV);
-      if (Math.abs(this.speed) < 0.1 && !fwd) this.speed = 0;
-      this.steer += (turn - this.steer) * Math.min(1, dt * 6);
-      const grip = Math.min(1, Math.abs(this.speed) / 6);
-      this.yaw += this.steer * dt * 1.7 * grip * Math.sign(this.speed || 1) * (1 - Math.min(0.55, Math.abs(this.speed) / 90));
-      // traffic contact: bump to a halt
-      if (traffic) for (const c of traffic.nearby(p.x, p.z, 5)) { const dx = c.wx - p.x, dz = c.wz - p.z; const al = dx * c.ux + dz * c.uz, ac = -dx * c.uz + dz * c.ux; if (Math.abs(al) < 4.4 && Math.abs(ac) < 2.0) { this.speed *= -0.25; c.v = 0; break; } }
+      // exploration driving: smooth throttle, speed-sensitive steering, gentle lane keeping, no crashes
+      const maxV = boost ? 42 : 25;   // 150 / 90 km/h
+      let acc;
+      if (fwd > 0.05) acc = (this.speed < 0 ? 14 : 5.5 * (1 - Math.max(0, this.speed) / maxV) + 0.6) * fwd;
+      else if (fwd < -0.05) acc = this.speed > 0.5 ? 13 * fwd : 4 * fwd;
+      else acc = -Math.sign(this.speed) * Math.min(Math.abs(this.speed) / Math.max(dt, 1e-3), 1.6 + Math.abs(this.speed) * 0.04);
+      this.speed = THREE.MathUtils.clamp(this.speed + acc * dt, -7, maxV);
+      if (this.speed > maxV) this.speed += (maxV - this.speed) * Math.min(1, dt * 2);
+      this.steer += (turn - this.steer) * Math.min(1, dt * (Math.abs(turn) > Math.abs(this.steer) ? 4 : 7));
+      const v = Math.abs(this.speed);
+      const grip = Math.min(1, v / 4);
+      // the turning circle widens with speed, so the car never snaps at high speed
+      const rate = 1.9 * grip / (1 + v * 0.045);
+      this.yaw += this.steer * dt * rate * Math.sign(this.speed || 1);
+      if (Math.abs(turn) < 0.05 && v > 6 && this.osm && this.gy < 2) this.laneKeep(dt);
       this.move(dt);
       const m = this.models.car;
-      this.gy = this.groundAt(p.x, p.z);
+      this.gy += (this.groundAt(p.x, p.z) - this.gy) * Math.min(1, dt * 10);
+      // body roll and pitch for weight
+      this.pitch = (this.pitch || 0) + ((acc * 0.004) - (this.pitch || 0)) * Math.min(1, dt * 4);
       m.position.set(p.x, this.gy, p.z);
-      m.rotation.set(0, this.yaw, -this.steer * Math.min(1, Math.abs(this.speed) / 30) * 0.05);
+      m.rotation.set(0, this.yaw, 0);
+      m.rotateZ(THREE.MathUtils.clamp(this.pitch, -0.03, 0.03));
+      m.rotateX(-this.steer * Math.min(1, v / 25) * 0.035);
     } else {
       const maxV = boost ? 95 : 48;
       const target = fwd * maxV;
@@ -223,10 +233,19 @@ export class Player {
     const p = this.pos;
     const dx = Math.cos(this.yaw) * this.speed * dt, dz = -Math.sin(this.yaw) * this.speed * dt;
     if (this.canStand(p.x + dx, p.z + dz)) { p.x += dx; p.z += dz; return; }
-    // slide along the obstacle
-    if (this.canStand(p.x + dx, p.z)) { p.x += dx; this.speed *= 0.92; return; }
-    if (this.canStand(p.x, p.z + dz)) { p.z += dz; this.speed *= 0.92; return; }
-    this.speed *= this.mode === 'car' ? -0.2 : 0;
+    // glide along walls instead of bouncing off them
+    if (this.canStand(p.x + dx, p.z)) { p.x += dx; this.speed *= 1 - Math.min(1, dt * 1.5); return; }
+    if (this.canStand(p.x, p.z + dz)) { p.z += dz; this.speed *= 1 - Math.min(1, dt * 1.5); return; }
+    this.speed *= 1 - Math.min(1, dt * 6);
+  }
+  // when the driver is not steering, ease the heading onto the road direction (within 25 degrees)
+  laneKeep(dt) {
+    const hit = this.osm.nearestRoad(this.pos.x, this.pos.z, 4);
+    if (!hit || hit.dist > 0) return;
+    let ry = Math.atan2(-hit.dirz, hit.dirx);
+    let d = Math.atan2(Math.sin(ry - this.yaw), Math.cos(ry - this.yaw));
+    if (Math.abs(d) > Math.PI / 2) { ry += Math.PI; d = Math.atan2(Math.sin(ry - this.yaw), Math.cos(ry - this.yaw)); }
+    if (Math.abs(d) < 0.44) this.yaw += d * Math.min(1, dt * 1.2);
   }
   get height() { return this.mode === 'heli' ? this.alt : this.gy + (this.mode === 'car' ? 1.3 : 1.6 + this.alt); }
 }

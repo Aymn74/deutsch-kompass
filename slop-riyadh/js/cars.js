@@ -50,12 +50,16 @@ export class Cars {
       const ang = Math.random() * Math.PI * 2, rad = 150 + Math.random() * 1100;
       const hit = osm.nearestRoad(focus.x + Math.cos(ang) * rad, focus.z + Math.sin(ang) * rad, 120, (r) => SPAWN.has(osm.cls(r)) && !(osm.flags(r) & F.tunnel));
       if (!hit) continue;
+      // keep spawns apart (and away from the player) so no two cars ever start inside each other
+      if (this.cars.some((o) => o !== c && o.ok && o.wx !== undefined && (o.wx - hit.x) ** 2 + (o.wz - hit.z) ** 2 < 400)) continue;
+      if ((hit.x - focus.x) ** 2 + (hit.z - focus.z) ** 2 < 60 * 60) continue;
       const r = hit.road, ow = osm.flags(r) & F.oneway;
       const lanes = Math.max(1, (osm.s.roads[r * 4] >> 16) & 255);
       Object.assign(c, { r, i: hit.seg, t: hit.t, dir: ow ? 1 : Math.random() < 0.5 ? 1 : -1, lane: Math.floor(Math.random() * lanes), v: 8, ok: true });
       const cls = osm.cls(r);
       c.v0 = (cls <= RC.trunk ? 24 : cls <= RC.secondary ? 17 : 13) * (0.8 + Math.random() * 0.35);
       const [x0, z0, x1, z1] = this.segOf(c); c.t *= Math.hypot(x1 - x0, z1 - z0);
+      c.wx = hit.x; c.wz = hit.z; c.ux = hit.dirx * c.dir; c.uz = hit.dirz * c.dir;
       return;
     }
     c.ok = false;
@@ -118,7 +122,18 @@ export class Cars {
       const ux = (x1 - x0) / L * c.dir, uz = (z1 - z0) / L * c.dir;
       const tt = c.dir > 0 ? c.t : L - c.t;
       let x = x0 + (x1 - x0) * (tt / L), z = z0 + (z1 - z0) * (tt / L);
-      if (player) { const dx = player.x - x, dz = player.z - z, ahead = dx * ux + dz * uz; if (ahead > 0 && ahead < 40 && Math.abs(dx * -uz + dz * ux) < 2.5) gap = Math.min(gap, ahead - 6); }
+      if (c.wx !== undefined) {
+        // anything in a cone ahead (other cars at merges and junctions, the player) makes this car brake
+        const cx0 = c.wx, cz0 = c.wz, cux = c.ux, cuz = c.uz;
+        const look = (ox, oz, wide) => {
+          const dx = ox - cx0, dz = oz - cz0, ahead = dx * cux + dz * cuz;
+          if (ahead <= 0 || ahead > 35) return;
+          const lat = Math.abs(-dx * cuz + dz * cux);
+          if (lat < wide + ahead * 0.06) gap = Math.min(gap, ahead - 6.5);
+        };
+        for (const o of this.cars) if (o !== c && o.ok && o.wx !== undefined && Math.abs(o.wx - cx0) < 36 && Math.abs(o.wz - cz0) < 36) look(o.wx, o.wz, 2.3);
+        if (player) look(player.x, player.z, 2.8);
+      }
       const sStar = 2.5 + c.v * 1.3 + (c.v * c.v) / 10;
       const acc = 2.2 * (1 - (c.v / c.v0) ** 4 - (sStar / Math.max(gap, 0.5)) ** 2);
       c.v = Math.max(0, c.v + Math.max(-9, acc) * dt);
@@ -142,6 +157,7 @@ export class Cars {
       const off = ow ? -hw + (c.lane + 0.5) * (2 * hw / lanes) : (c.lane + 0.5) * (hw / lanes);
       x += -uz * off; z += ux * off;
       const y = osm.roadY(c.r, c.dir > 0 ? c.p : osm.roadLen[c.r] - c.p) + 0.12;
+      if (player && (x - player.x) ** 2 + (z - player.z) ** 2 < 16) { c.wx = x; c.wz = z; c.ux = ux; c.uz = uz; continue; }
       const mesh = this.meshes[c.type], k = counts[c.type]++;
       this.m.makeRotationY(Math.atan2(-uz, ux)); this.m.setPosition(x, y, z);
       mesh.setMatrixAt(k, this.m);

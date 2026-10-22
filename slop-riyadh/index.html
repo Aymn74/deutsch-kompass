@@ -166,9 +166,30 @@ body.hud-hidden .icon-hide { display: none; } body.hud-hidden .icon-show { displ
   .brand h1 { font-size: 18px; }
   .brand-mark { width: 32px; height: 32px; font-size: 18px; }
 }
+/* touch screens: the thumbs own the bottom corners, so the map and the street sign move up */
 @media (pointer: coarse) {
-  .hud-bottom .cluster, .controls-hint { display: none; }
-  #hud .hud-bottom { padding-bottom: 0; }
+  .hud-bottom .cluster, .controls-hint, .brand-subtitle { display: none; }
+  .hud-bottom { justify-content: center; }
+  .dock-center { order: 0; width: auto; }
+  .brand { padding: 8px 12px; gap: 10px; }
+  .brand h1 { font-size: 17px; white-space: nowrap; }
+  .brand-mark { width: 30px; height: 30px; font-size: 17px; border-radius: 8px; }
+  .osm-credit { font-size: 9.5px; }
+  .toolbar { padding: 4px; }
+  .tool-btn, .time-btn { height: 34px; padding: 0 9px; }
+  .mode-btn { height: 44px; padding: 0 16px; }
+  .dock-start { position: fixed; z-index: 10; top: calc(118px + env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); flex-direction: column; align-items: flex-end; gap: 8px; }
+  .radar { width: 96px; height: 96px; }
+  .sign { min-width: 0; max-width: 190px; padding: 6px 10px 7px; }
+  .sign-ar { font-size: 14px; }
+  .sign-en { font-size: 11px; }
+  .sign-meta { display: none; }
+}
+@media (pointer: coarse) and (orientation: landscape) {
+  .dock-start { top: calc(78px + env(safe-area-inset-top, 0px)); right: auto; left: max(16px, env(safe-area-inset-left, 0px)); flex-direction: row-reverse; align-items: flex-start; }
+  .radar { width: 84px; height: 84px; }
+  #touch-controls { padding-block: 0 calc(16px + env(safe-area-inset-bottom, 0px)); padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+  .hud-bottom { justify-content: center; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
