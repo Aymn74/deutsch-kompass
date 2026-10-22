@@ -4,8 +4,10 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as G from './geo.js';
-import { U, makeGroundMaterial, makeSky } from './materials.js';
+import { U, makeGroundMaterial, makeSky, poolMat } from './materials.js';
 import { City } from './city.js';
 import { buildLandmarks, buildMetro } from './landmarks.js';
 import { Traffic } from './traffic.js';
@@ -42,10 +44,11 @@ const hemi = new THREE.HemisphereLight(0xffffff, 0xffffff, 1);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 3);
 sun.castShadow = true;
-sun.shadow.mapSize.set(touch ? 1024 : 2048, touch ? 1024 : 2048);
+sun.shadow.mapSize.set(touch ? 1024 : 4096, touch ? 1024 : 4096);
 Object.assign(sun.shadow.camera, { left: -260, right: 260, top: 260, bottom: -260, near: 10, far: 2600 });
-sun.shadow.bias = -0.0004;
-sun.shadow.normalBias = 0.6;
+sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.7;
+sun.shadow.radius = 3;
 scene.add(sun, sun.target);
 
 // ground and the arterial carriageways (they run on into the desert)
@@ -53,7 +56,7 @@ const ground = new THREE.Mesh(new THREE.PlaneGeometry(90000, 90000).rotateX(-Mat
 ground.receiveShadow = true;
 scene.add(ground);
 {
-  const asphalt = new THREE.MeshStandardMaterial({ color: '#4f4c49', roughness: 0.95 });
+  const asphalt = makeGroundMaterial({ asphalt: true });
   const geos = [];
   for (const r of G.ROADS_U) {
     const a = G.toWorld(r.c, (G.EXT.v0 + G.EXT.v1) / 2);
@@ -69,9 +72,9 @@ scene.add(ground);
 
 // ---------- atmosphere presets ----------
 const PRESETS = {
-  noon: { ar: 'الظهيرة', sunEl: 70, sunAz: 165, sun: '#fff2df', sunI: 3.1, hs: '#c3d5e6', hg: '#c9a979', hi: 1.15, top: '#5b8fca', horizon: '#dcd6c4', bottom: '#c9b08a', glow: '#fff1d0', fog: '#d6cdb9', near: 700, far: 12000, night: 0, exp: 0.92, stars: 0, bloom: 0.1, env: 0.8 },
+  noon: { ar: 'الظهيرة', sunEl: 70, sunAz: 165, sun: '#fff2df', sunI: 3.1, hs: '#c3d5e6', hg: '#b8956a', hi: 0.95, top: '#5b8fca', horizon: '#dcd6c4', bottom: '#c9b08a', glow: '#fff1d0', fog: '#d6cdb9', near: 700, far: 12000, night: 0, exp: 0.9, stars: 0, bloom: 0.08, env: 1.0 },
   maghrib: { ar: 'المغرب', sunEl: 4.5, sunAz: 258, sun: '#ffa65e', sunI: 2.6, hs: '#7d8db2', hg: '#a2774f', hi: 0.75, top: '#2d4d88', horizon: '#f2a25a', bottom: '#8a6a4c', glow: '#ff9545', fog: '#d4956a', near: 500, far: 9500, night: 0.45, exp: 1.05, stars: 0, bloom: 0.38, env: 0.6 },
-  night: { ar: 'الليل', sunEl: 38, sunAz: 115, sun: '#9fb4e0', sunI: 0.25, hs: '#26304d', hg: '#3a2c1e', hi: 0.4, top: '#030712', horizon: '#2a2232', bottom: '#1a140f', glow: '#5b3a22', fog: '#1f1b22', near: 400, far: 9000, night: 1, exp: 1.05, stars: 1, bloom: 0.5, env: 0.35 },
+  night: { ar: 'الليل', sunEl: 38, sunAz: 115, sun: '#9fb4e0', sunI: 0.25, hs: '#1e2840', hg: '#2c2117', hi: 0.28, top: '#030712', horizon: '#2a2232', bottom: '#1a140f', glow: '#5b3a22', fog: '#1f1b22', near: 400, far: 9000, night: 1, exp: 1.1, stars: 1, bloom: 0.62, env: 0.25 },
   haboob: { ar: 'عاصفة رملية', sunEl: 42, sunAz: 205, sun: '#ffc78a', sunI: 0.95, hs: '#d39a5a', hg: '#9a6a3c', hi: 1.15, top: '#b67b44', horizon: '#c98c50', bottom: '#a8733f', glow: '#e0a060', fog: '#c3854b', near: 15, far: 750, night: 0.3, exp: 1.0, stars: 0, bloom: 0.22, env: 0.5, dust: 1 }
 };
 let preset = PRESETS.maghrib, presetId = 'maghrib';
@@ -95,6 +98,7 @@ function applyPreset(id) {
   scene.environment = envRT.texture;
   scene.environmentIntensity = preset.env;
   dust.visible = !!preset.dust;
+  poolMat.visible = preset.night > 0.05;
   document.querySelectorAll('.time-btn').forEach((b) => b.classList.toggle('active', b.dataset.time === id));
 }
 
@@ -113,11 +117,28 @@ const dust = (() => {
 // ---------- post ----------
 let composer = null, bloom = null;
 if (!touch) {
-  composer = new EffectComposer(renderer);
+  // multisampled HDR target keeps edges clean through the post chain
+  const rt = new THREE.WebGLRenderTarget(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: 4 });
+  composer = new EffectComposer(renderer, rt);
   composer.addPass(new RenderPass(scene, camera));
   bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.4, 0.5, 0.9);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
+  // grade: a touch of contrast and warmth, gentle vignette
+  composer.addPass(new ShaderPass({
+    uniforms: { tDiffuse: { value: null } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+      void main(){
+        vec3 c = texture2D(tDiffuse, vUv).rgb;
+        float l = dot(c, vec3(0.299, 0.587, 0.114));
+        c = mix(vec3(l), c, 1.1);
+        c = (c - 0.5) * 1.06 + 0.5;
+        vec2 q = vUv - 0.5;
+        c *= 1.0 - dot(q, q) * 0.42;
+        gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+      }`
+  }));
 }
 
 // ---------- world ----------
@@ -129,15 +150,33 @@ let metro = null;
 // pedestrians: a light crowd on the pavements near the player
 const peds = (() => {
   const N = 220;
-  const body = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.2, 0.3, 1.45, 8).translate(0, 0.725, 0), new THREE.MeshStandardMaterial({ roughness: 0.8 }), N);
-  const head = new THREE.InstancedMesh(new THREE.SphereGeometry(0.13, 8, 6).translate(0, 1.66, 0), new THREE.MeshStandardMaterial({ roughness: 0.8 }), N);
+  // two figures with painted parts: a man in thobe and shemagh, a woman in abaya
+  const paint = (g, c) => { g = g.index ? g.toNonIndexed() : g; g.deleteAttribute('uv'); const n = g.attributes.position.count, a = new Float32Array(n * 3); const col = new THREE.Color(c); for (let i = 0; i < n; i++) col.toArray(a, i * 3); g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g; };
+  const man = mergeGeometries([
+    paint(new THREE.CylinderGeometry(0.19, 0.29, 1.42, 12).translate(0, 0.71, 0), '#ffffff'),
+    paint(new THREE.SphereGeometry(0.22, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.5, 0.85).translate(0, 1.42, 0), '#ffffff'),
+    paint(new THREE.CylinderGeometry(0.055, 0.07, 0.62, 6).translate(0, 1.12, 0.24), '#ffffff'),
+    paint(new THREE.CylinderGeometry(0.055, 0.07, 0.62, 6).translate(0, 1.12, -0.24), '#ffffff'),
+    paint(new THREE.SphereGeometry(0.11, 10, 8).translate(0.02, 1.64, 0), '#9c7153'),
+    paint(new THREE.ConeGeometry(0.2, 0.46, 12, 1, true).translate(-0.02, 1.56, 0), '#c8343a'),
+    paint(new THREE.SphereGeometry(0.125, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 1.68, 0), '#e9e5e0'),
+    paint(new THREE.TorusGeometry(0.115, 0.02, 5, 14).rotateX(Math.PI / 2).translate(0, 1.73, 0), '#151515')
+  ]);
+  const woman = mergeGeometries([
+    paint(new THREE.CylinderGeometry(0.17, 0.34, 1.5, 12).translate(0, 0.75, 0), '#ffffff'),
+    paint(new THREE.SphereGeometry(0.2, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.55, 0.85).translate(0, 1.48, 0), '#ffffff'),
+    paint(new THREE.SphereGeometry(0.115, 10, 8).scale(1, 1.15, 1).translate(0, 1.63, 0), '#ffffff')
+  ]);
+  const pmat = new THREE.MeshStandardMaterial({ roughness: 0.85, vertexColors: true });
+  const body = new THREE.InstancedMesh(man, pmat, N);
+  const head = new THREE.InstancedMesh(woman, pmat, N);
   body.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
   head.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
   body.frustumCulled = head.frustumCulled = false;
   body.castShadow = true;
   scene.add(body, head);
   const list = Array.from({ length: N }, () => ({ ok: false }));
-  const m = new THREE.Matrix4();
+  const m = new THREE.Matrix4(), zero = new THREE.Matrix4();
   const white = new THREE.Color('#f3f1ec'), black = new THREE.Color('#15151a'), skin = new THREE.Color('#b98a66'), scarf = new THREE.Color('#d9d2cc');
   function respawn(p, fx, fz) {
     for (let tries = 0; tries < 12; tries++) {
@@ -176,9 +215,10 @@ const peds = (() => {
         p.wx = w.x; p.wz = w.z;
         const yaw = G.TH + side * Math.PI / 2 + (p.dir < 0 ? Math.PI : 0);
         m.makeRotationY(yaw); m.setPosition(w.x, 0.22 + Math.abs(Math.sin(p.s * 3.5)) * 0.03, w.z);
-        body.setMatrixAt(i, m); head.setMatrixAt(i, m);
-        body.setColorAt(i, p.abaya ? black : white);
-        head.setColorAt(i, p.abaya ? black : (i % 3 ? scarf : skin));
+        (p.abaya ? head : body).setMatrixAt(i, m);
+        zero.makeScale(0, 0, 0); (p.abaya ? body : head).setMatrixAt(i, zero);
+        body.setColorAt(i, i % 7 ? white : scarf);
+        head.setColorAt(i, black);
       });
       body.instanceMatrix.needsUpdate = head.instanceMatrix.needsUpdate = true;
       body.instanceColor.needsUpdate = head.instanceColor.needsUpdate = true;
@@ -651,7 +691,7 @@ function frame() {
     dust.rotation.y += dt * 0.15;
   }
   // headlights in the dark
-  player.models.car.userData.spot.intensity = player.mode === 'car' ? U.uNight.value * 900 : 0;
+  player.models.car.userData.spot.intensity = player.mode === 'car' ? U.uNight.value * 260 : 0;
   if (composer) composer.render(); else renderer.render(scene, camera);
   mmTimer -= dt;
   if (mmTimer <= 0 && !document.body.classList.contains('hud-hidden')) { mmTimer = 0.1; drawMinimap(); }

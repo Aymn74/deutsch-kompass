@@ -1,7 +1,7 @@
 // city.js — streams the city in chunks: detailed blocks near the player, a coarse silhouette to the horizon.
 import * as THREE from 'three';
 import { TH, toWorld, toGrid, blocksIn, rng, hash2, ROADS_U, ROADS_V, EXT, inMask } from './geo.js';
-import { ST, U, makeBuildingMaterial, palmGeometries, palmTrunkMat, palmCrownMat } from './materials.js';
+import { ST, U, makeBuildingMaterial, palmGeometries, palmTrunkMat, palmCrownMat, poolMat, poolGeo } from './materials.js';
 
 const C = Math.cos(TH), S = Math.sin(TH);
 const DETAIL = 800, COARSE = 2000;
@@ -64,7 +64,8 @@ export class Batch {
   }
 }
 export class Sink {
-  constructor(lod) { this.lod = lod; this.boxes = new Batch(); this.domes = new Batch(); this.caps = new Batch(); this.palms = new Batch(); }
+  constructor(lod) { this.lod = lod; this.boxes = new Batch(); this.domes = new Batch(); this.caps = new Batch(); this.palms = new Batch(); this.lights = new Batch(); }
+  light(u, v, r, col) { const w = toWorld(u, v); this.lights.boxW(w.x, w.z, r * 2, r * 2, 0.27, 1, 0, col, 0); }
   palm(u, v, h, r) {
     const w = toWorld(u, v);
     const yaw = r() * Math.PI * 2, s = h * (0.9 + r() * 0.2);
@@ -74,6 +75,26 @@ export class Sink {
     this.palms.c.push(g, g * (0.95 + r() * 0.1), g * 0.85);
     this.palms.st.push(0); this.palms.sd.push(0);
   }
+}
+
+// ---------- street lighting ----------
+const ART_LIGHT = new THREE.Color(1.0, 0.9, 0.74).multiplyScalar(0.17);
+const LOCAL_LIGHT = new THREE.Color(1.0, 0.7, 0.4).multiplyScalar(0.26);
+const POLE_C = new THREE.Color('#6d7176'), LAMP_C = new THREE.Color('#fff1cf');
+// lamps stand on the u0 and v0 kerbs of each block, so every local street is lit from one side
+function streetLamps(sink, r, kind) {
+  const old = kind === 'old';
+  const step = old ? 16 : 22, H = old ? 4.2 : 7.5;
+  const lampAt = (u, v, du, dv) => {
+    if (!old) {
+      sink.boxes.box(u, v, 0.18, 0.18, 0.22, H, POLE_C, ST.plain);
+      sink.boxes.box(u + du * 0.8, v + dv * 0.8, du ? 1.6 : 0.14, dv ? 1.6 : 0.14, 0.22 + H, 0.12, POLE_C, ST.plain);
+    }
+    sink.boxes.box(u + du * 1.5, v + dv * 1.5, 0.55, 0.55, 0.22 + H - 0.22, 0.2, LAMP_C, ST.lamp);
+    sink.light(u + du * 3.2, v + dv * 3.2, old ? 7 : 11, LOCAL_LIGHT);
+  };
+  for (let a = r.u0 + 9; a < r.u1 - 4; a += step) lampAt(a, r.v0 + 0.9, 0, -1);
+  for (let b = r.v0 + 9; b < r.v1 - 4; b += step) lampAt(r.u0 + 0.9, b, -1, 0);
 }
 
 // ---------- block generators ----------
@@ -263,6 +284,7 @@ function genBlock(sink, sb, ku, kv, r, info) {
     return;
   }
   slab(sink, r, k === 'old' ? SLAB.old : SLAB.paving);
+  if (!coarse) streetLamps(sink, r, k);
   const inner = inset(r, k === 'old' ? 1.2 : 4.2);
   if (inner.u1 - inner.u0 < 6 || inner.v1 - inner.v0 < 6) return;
   if (coarse && k !== 'tower') {
@@ -317,10 +339,10 @@ function roadFurniture(sink, road, axis, t0, t1, coarse) {
     }
     if (coarse) continue;
     for (let t = a + 6; t < b - 4; t += road.kind === 'minor' ? 30 : 18) sink.palm(...at(0, t), 9 + R() * 3, R);
-    for (let t = a + 15; t < b - 4; t += 40) {
+    for (let t = a + 12; t < b - 4; t += 30) {
       box(0, t, 0.35, 0.35, 0.35, 11, POLE, ST.plain);
       box(0, t, half * 2 + 4, 0.25, 11, 0.25, POLE, ST.plain);
-      for (const sd of [-1, 1]) box(sd * (half + 2), t, 1.2, 0.6, 10.75, 0.3, LAMP, ST.lamp);
+      for (const sd of [-1, 1]) { box(sd * (half + 2), t, 1.2, 0.6, 10.75, 0.3, LAMP, ST.lamp); sink.light(...at(sd * (half + 5), t), 16, ART_LIGHT); }
     }
   }
   if (coarse) return;
@@ -369,6 +391,8 @@ export class City {
       add(sink.caps.mesh(capGeo, capMat, false));
       add(sink.palms.mesh(palm.trunk, palmTrunkMat, false));
       add(sink.palms.mesh(palm.crown, palmCrownMat, false));
+      const lm = sink.lights.mesh(poolGeo, poolMat, false);
+      if (lm) { lm.renderOrder = 2; g.add(lm); g.userData.pools = lm; }
     }
     g.userData = { ci, cj, lod, n: sink.boxes.count + sink.palms.count };
     return g;

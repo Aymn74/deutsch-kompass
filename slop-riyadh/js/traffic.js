@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ROADS_U, ROADS_V, TH, toWorld, toGrid, EXT, hash2, rng } from './geo.js';
-import { U } from './materials.js';
+import { U, poolMat, poolGeo } from './materials.js';
 
 // ---------- car models (forward = +x), with a 'part' attribute: 0 paint, 1 glass, 2 rubber, 3 headlamp, 4 tail lamp, 5 trim ----------
 function part(geo, id) {
@@ -12,52 +12,70 @@ function part(geo, id) {
   return geo;
 }
 export function buildCarGeometry(type = 'suv') {
+  // side profile (x forward, y up), extruded across the width with rounded edges; wheel arches cut out
   const P = {
-    suv: { L: 4.95, W: 1.98, body: 1.05, cabL: 2.9, cabH: 0.85, cabX: -0.35, ride: 0.42 },
-    sedan: { L: 4.85, W: 1.84, body: 0.72, cabL: 2.5, cabH: 0.62, cabX: -0.2, ride: 0.32 },
-    pickup: { L: 5.3, W: 1.86, body: 0.88, cabL: 1.9, cabH: 0.78, cabX: 0.55, ride: 0.45 }
+    suv: { L: 4.95, W: 1.96, y0: 0.42, belt: 1.2, roof: 1.86, gx: -2.7, pts: [[2.475, 0.95], [2.36, 1.09], [1.45, 1.2], [0.72, 1.82], [-2.22, 1.86], [-2.475, 1.72]] },
+    sedan: { L: 4.85, W: 1.84, y0: 0.34, belt: 1.03, roof: 1.47, gx: -2.2, pts: [[2.425, 0.82], [2.28, 0.95], [1.18, 1.03], [0.42, 1.46], [-1.18, 1.47], [-2.07, 1.07], [-2.425, 1.02]] },
+    pickup: { L: 5.3, W: 1.88, y0: 0.45, belt: 1.18, roof: 1.8, gx: -0.15, pts: [[2.65, 0.97], [2.5, 1.1], [1.65, 1.18], [1.2, 1.78], [0.05, 1.8], [-0.02, 1.18], [-2.65, 1.18]] }
   }[type];
-  const parts = [];
-  const y0 = P.ride;
-  parts.push(part(new THREE.BoxGeometry(P.L, P.body, P.W).translate(0, y0 + P.body / 2, 0), 0));
-  // cabin with sloped glass (a box squeezed at the top)
-  const cab = new THREE.BoxGeometry(P.cabL, P.cabH, P.W * 0.92, 1, 1, 1);
-  const pa = cab.attributes.position;
-  for (let i = 0; i < pa.count; i++) if (pa.getY(i) > 0) pa.setX(i, pa.getX(i) * (type === 'suv' ? 0.92 : 0.74) - 0.08);
-  cab.translate(P.cabX, y0 + P.body + P.cabH / 2, 0);
-  parts.push(part(cab, 1));
-  // roof skin above the glass band
-  parts.push(part(new THREE.BoxGeometry(P.cabL * (type === 'suv' ? 0.88 : 0.7), 0.08, P.W * 0.9).translate(P.cabX - 0.08, y0 + P.body + P.cabH, 0), 0));
-  if (type === 'pickup') parts.push(part(new THREE.BoxGeometry(2.1, 0.12, P.W * 0.96).translate(-1.45, y0 + P.body + 0.05, 0), 5));
-  const wheel = new THREE.CylinderGeometry(0.38, 0.38, 0.28, 12).rotateX(Math.PI / 2);
-  for (const [x, z] of [[P.L * 0.32, P.W / 2 - 0.1], [P.L * 0.32, -P.W / 2 + 0.1], [-P.L * 0.32, P.W / 2 - 0.1], [-P.L * 0.32, -P.W / 2 + 0.1]])
-    parts.push(part(wheel.clone().translate(x, 0.38, z), 2));
-  for (const z of [-1, 1]) {
-    parts.push(part(new THREE.BoxGeometry(0.06, 0.16, 0.42).translate(P.L / 2 + 0.01, y0 + P.body * 0.7, z * (P.W / 2 - 0.3)), 3));
-    parts.push(part(new THREE.BoxGeometry(0.06, 0.2, 0.36).translate(-P.L / 2 - 0.01, y0 + P.body * 0.72, z * (P.W / 2 - 0.25)), 4));
+  const { L, W, y0 } = P;
+  const xw = L * 0.31, wr = 0.38, ar = 0.47;
+  const sh = new THREE.Shape();
+  sh.moveTo(L / 2, y0);
+  for (const [x, y] of P.pts) sh.lineTo(x, y);
+  sh.lineTo(-L / 2, y0);
+  sh.lineTo(-xw - ar, y0);
+  sh.absarc(-xw, wr, ar, Math.PI, 0, true);
+  sh.lineTo(xw - ar, y0);
+  sh.absarc(xw, wr, ar, Math.PI, 0, true);
+  sh.lineTo(L / 2, y0);
+  let body = new THREE.ExtrudeGeometry(sh, { depth: W - 0.16, bevelEnabled: true, bevelThickness: 0.08, bevelSize: 0.07, bevelSegments: 2, curveSegments: 6 });
+  body.translate(0, 0, -(W - 0.16) / 2);
+  // tumblehome: the glasshouse leans inwards
+  const pa = body.attributes.position;
+  for (let i = 0; i < pa.count; i++) { const y = pa.getY(i); if (y > P.belt) pa.setZ(i, pa.getZ(i) * (1 - 0.14 * Math.min(1, (y - P.belt) / (P.roof - P.belt)))); }
+  body.computeVertexNormals();
+  const parts = [part(body, 0)];
+  if (type === 'pickup') parts.push(part(new THREE.BoxGeometry(2.45, 0.1, W - 0.25).translate(-1.33, 0.86, 0), 5));
+  const tyre = new THREE.CylinderGeometry(wr, wr, 0.26, 16).rotateX(Math.PI / 2);
+  const rim = new THREE.CylinderGeometry(wr * 0.62, wr * 0.62, 0.27, 12).rotateX(Math.PI / 2);
+  for (const [x, z] of [[xw, W / 2 - 0.16], [xw, -W / 2 + 0.16], [-xw, W / 2 - 0.16], [-xw, -W / 2 + 0.16]]) {
+    parts.push(part(tyre.clone().translate(x, wr, z), 2));
+    parts.push(part(rim.clone().translate(x, wr, z + Math.sign(z) * 0.01), 6));
   }
-  parts.push(part(new THREE.BoxGeometry(0.08, 0.22, P.W * 0.6).translate(P.L / 2 + 0.02, y0 + P.body * 0.4, 0), 5));
+  const fy = P.pts[0][1] - 0.14;
+  for (const z of [-1, 1]) {
+    parts.push(part(new THREE.BoxGeometry(0.1, 0.13, 0.42).translate(L / 2 + 0.03, fy, z * (W / 2 - 0.32)), 3));
+    parts.push(part(new THREE.BoxGeometry(0.1, 0.18, 0.34).translate(-L / 2 - 0.03, P.pts[P.pts.length - 1][1] - 0.2, z * (W / 2 - 0.27)), 4));
+  }
+  parts.push(part(new THREE.BoxGeometry(0.1, 0.2, W * 0.55).translate(L / 2 + 0.04, y0 + 0.22, 0), 5));
   const g = mergeGeometries(parts);
-  g.computeVertexNormals();
+  const n = g.attributes.position.count;
+  g.setAttribute('glassBand', new THREE.BufferAttribute(new Float32Array(n * 3).map((_, i) => [P.belt, P.roof, P.gx][i % 3]), 3));
   return g;
 }
 export function makeCarMaterial({ instanced = true } = {}) {
   const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.32, metalness: 0.45 });
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, U);
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float part; varying float vPart;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPart = part;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vPart; uniform float uNight; float cGlass; vec3 cEm;')
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float part; attribute vec3 glassBand; varying float vPart; varying vec3 vCarP; varying vec3 vBand;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPart = part; vCarP = position; vBand = glassBand;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vPart; varying vec3 vCarP; varying vec3 vBand; uniform float uNight; float cGlass; vec3 cEm;')
       .replace('#include <color_fragment>', `#include <color_fragment>
   cGlass = 0.0; cEm = vec3(0.0);
   float pp = floor(vPart + 0.5);
-  if (pp == 1.0) { diffuseColor.rgb = vec3(0.05, 0.07, 0.09); cGlass = 1.0; }
+  if (pp == 0.0 && vCarP.y > vBand.x + 0.03 && vCarP.y < vBand.y - 0.07 && vCarP.x > vBand.z) pp = 1.0;
+  if (pp == 1.0) { diffuseColor.rgb = vec3(0.04, 0.06, 0.08); cGlass = 1.0; }
+  else if (pp == 6.0) diffuseColor.rgb = vec3(0.62, 0.63, 0.65);
+  else if (pp == 0.0) diffuseColor.rgb *= mix(0.55, 1.0, smoothstep(0.3, 0.75, vCarP.y));
   else if (pp == 2.0) diffuseColor.rgb = vec3(0.03);
   else if (pp == 3.0) { diffuseColor.rgb = vec3(0.95); cEm = vec3(1.0, 0.95, 0.85) * (0.3 + 6.0 * uNight); }
   else if (pp == 4.0) { diffuseColor.rgb = vec3(0.6, 0.02, 0.02); cEm = vec3(1.0, 0.05, 0.03) * (0.4 + 3.5 * uNight); }
   else if (pp == 5.0) diffuseColor.rgb = vec3(0.12);`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
   if (pp == 2.0 || pp == 5.0) { roughnessFactor = 0.9; metalnessFactor = 0.0; }
+  if (pp == 6.0) { roughnessFactor = 0.3; metalnessFactor = 0.9; }
+  if (pp == 0.0) { roughnessFactor = 0.22; metalnessFactor = 0.55; }
   roughnessFactor = mix(roughnessFactor, 0.05, cGlass); metalnessFactor = mix(metalnessFactor, 0.9, cGlass);`)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance += cEm;');
   };
@@ -83,7 +101,7 @@ function junctionPhase(ju, jv, t) {
   return { u: 'R', v: 'R' };
 }
 
-const WINDOW = 2800, LANE_W = 3.6, SPACING = 70;
+const WINDOW = 2800, LANE_W = 3.6, SPACING = 230;
 
 export class Traffic {
   constructor(scene) {
@@ -103,6 +121,12 @@ export class Traffic {
       scene.add(m);
       return m;
     });
+    this.beamOff = new THREE.Matrix4().makeTranslation(11, 0.3, 0).multiply(new THREE.Matrix4().makeScale(19, 1, 7));
+    this.beams = new THREE.InstancedMesh(poolGeo, poolMat, this.MAX);
+    this.beams.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.MAX * 3).fill(0.3), 3);
+    this.beams.count = 0; this.beams.frustumCulled = false; this.beams.renderOrder = 3;
+    scene.add(this.beams);
+    this.bm = new THREE.Matrix4();
     this.lanes = new Map(); // key -> lane {road, axis, dir, k, off, cars: []}
     this.buildSignals();
     this.mtx = new THREE.Matrix4();
@@ -157,7 +181,8 @@ export class Traffic {
     const R = rng(Math.floor(Math.abs(road.c) * 7 + k * 31 + (dir > 0 ? 3 : 0)));
     const cars = [];
     const vmax = road.kind === 'freeway' ? 22 : road.kind === 'major' ? 16 : 13;
-    for (let t = tf - WINDOW; t < tf + WINDOW; t += SPACING * (0.5 + R() * 1.2)) {
+    const share = k === road.lanes - 1 ? 0.55 : k === 0 ? 1.15 : 0.85;   // inner lanes busier than the kerb lane
+    for (let t = tf - WINDOW; t < tf + WINDOW; t += SPACING / share * (0.45 + R() * 1.4)) {
       cars.push({ t, v: vmax * 0.7, v0: vmax * (0.8 + R() * 0.35) - k * 0.6, type: R() < 0.45 ? 0 : R() < 0.75 ? 1 : 2, color: PAINT[Math.floor(R() * PAINT.length)] });
     }
     this.lanes.set(key, { road, axis, dir, k, off, cars, lo: axis === 'u' ? EXT.v0 : EXT.u0, hi: axis === 'u' ? EXT.v1 : EXT.u1 });
@@ -182,6 +207,7 @@ export class Traffic {
     this.activateTimer = (this.activateTimer || 0) - dt;
     if (this.activateTimer <= 0) { this.activate(g); this.activateTimer = 1.0; }
     const counts = [0, 0, 0];
+    let nb = 0;
     const m = this.mtx;
     const pg = player ? toGrid(player.x, player.z) : null;
     for (const lane of this.lanes.values()) {
@@ -220,10 +246,12 @@ export class Traffic {
         if (n >= this.MAX) continue;
         m.makeRotationY(yaw); m.setPosition(w.x, 0, w.z);
         mesh.setMatrixAt(n, m);
+        if (U.uNight.value > 0.05 && nb < this.MAX) { this.bm.multiplyMatrices(m, this.beamOff); this.beams.setMatrixAt(nb++, this.bm); }
         mesh.instanceColor.setXYZ(n, c.color.r, c.color.g, c.color.b);
         counts[c.type]++;
       }
     }
+    this.beams.count = nb; this.beams.instanceMatrix.needsUpdate = true;
     this.meshes.forEach((mesh, i) => { mesh.count = counts[i]; mesh.instanceMatrix.needsUpdate = true; mesh.instanceColor.needsUpdate = true; });
     // signal heads
     const G = [0.1, 1.6, 0.4], A = [1.8, 1.0, 0.05], Rr = [1.8, 0.08, 0.05];

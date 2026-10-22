@@ -19,9 +19,192 @@ export const ST = {
 
 const HEAD = /* glsl */`
 uniform float uNight; uniform float uTime; uniform vec2 uFocus; uniform float uDetailR; uniform float uDust;
-varying vec3 vWP; varying vec3 vWN; varying float vStyle; varying float vSeed;
+varying vec3 vWP; varying vec3 vWN; flat varying float vStyle; flat varying float vSeed;
+varying vec3 vLP; varying vec3 vLN; flat varying vec3 vScl;
 float h21(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+  return mix(mix(h21(i), h21(i+vec2(1,0)), f.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), f.x), f.y); }
 `;
+
+// Facade shader. Instanced boxes know their own size (from the instance matrix), so windows, bays and
+// LED strips line up with each building's edges; non-instanced landmarks fall back to world coordinates.
+const FACADE = /* glsl */`
+  gGlass = 0.0; gEmis = vec3(0.0);
+  {
+  float st = floor(vStyle + 0.5);
+  vec3 n = normalize(vWN);
+  bool side = abs(n.y) < 0.5;
+  bool loc = vScl.x > 0.0;
+  float hc, W, yb, H, dE2;
+  if (loc) {
+    bool fx = abs(vLN.x) > 0.5;
+    hc = fx ? (vLP.z + 0.5) * vScl.z : (vLP.x + 0.5) * vScl.x;
+    W = fx ? vScl.z : vScl.x;
+    yb = vLP.y * vScl.y; H = vScl.y;
+    dE2 = min((0.5 - abs(vLP.x)) * vScl.x, (0.5 - abs(vLP.z)) * vScl.z);
+  } else {
+    vec2 tg = normalize(vec2(-n.z, n.x)); hc = dot(vWP.xz, tg) + 5000.0; W = 1e5; yb = vWP.y; H = 1e5; dE2 = 1e3;
+  }
+  float dE = min(hc, W - hc);
+  float dTop = H - yb;
+  float seedA = h21(vec2(vSeed * 91.0, 3.7));
+  vec3 warm = vec3(1.0, 0.70, 0.40);
+  vec3 base = diffuseColor.rgb;
+  // lamp heads, minaret rings, LED bands, signs, paint
+  if (st == 10.0) { gEmis = vec3(1.0, 0.84, 0.6) * 7.0 * uNight; diffuseColor.rgb = vec3(0.95); }
+  else if (st == 11.0) { gEmis = vec3(0.15, 1.0, 0.35) * 3.5 * uNight; diffuseColor.rgb = vec3(0.6, 0.9, 0.7); }
+  else if (st == 14.0) {
+    vec3 led = 0.5 + 0.5 * cos(6.2831 * (uTime * 0.05 + vSeed + vec3(0.0, 0.33, 0.67)));
+    gEmis = led * (0.02 + 2.2 * uNight); diffuseColor.rgb = mix(vec3(0.85), led, uNight);
+  }
+  else if (st == 15.0) { gEmis = diffuseColor.rgb * (0.25 + 2.4 * uNight); }
+  else if (st == 12.0) { diffuseColor.rgb *= 0.92 + 0.12 * vn(vWP.xz * 3.0); }
+  else if (st == 7.0) {
+    // pavements: tiles, a stone kerb at the edge, concrete sides; grass and sand keep their own grain
+    bool grass = base.g > base.r * 1.02;
+    bool sand = base.r > base.b * 1.35 && !grass;
+    if (!side) {
+      if (grass) diffuseColor.rgb *= 0.78 + 0.35 * vn(vWP.xz * 0.6) * vn(vWP.xz * 4.0 + 7.0);
+      else if (sand) diffuseColor.rgb *= 0.9 + 0.15 * vn(vWP.xz * 0.25) + 0.05 * vn(vWP.xz * 3.0);
+      else {
+        vec2 tl = fract(vWP.xz * vec2(1.6, 1.6));
+        float joint = step(0.93, max(tl.x, tl.y));
+        diffuseColor.rgb *= (0.95 + 0.08 * h21(floor(vWP.xz * 1.6))) * (1.0 - joint * 0.12);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.61, 0.58), step(dE2, 0.38));
+      }
+    } else diffuseColor.rgb = vec3(0.55, 0.54, 0.52) * (0.9 + 0.1 * vn(vWP.xz * 2.0));
+  }
+  else if (st == 13.0) {
+    // medians: painted black / yellow kerbs, sandy planting bed on top
+    if (side) diffuseColor.rgb = mix(vec3(0.06), vec3(0.62, 0.48, 0.12), step(0.5, fract(hc * 0.5)));
+    else diffuseColor.rgb = mix(vec3(0.55, 0.46, 0.33), vec3(0.62, 0.6, 0.56), step(dE2, 0.25)) * (0.9 + 0.15 * vn(vWP.xz * 1.5));
+  }
+  else if (st == 1.0) {
+    // compound walls: plaster, coping, and warm uplights washing the wall at night
+    if (side) {
+      diffuseColor.rgb *= 0.93 + 0.1 * vn(vec2(hc * 0.8, yb * 1.5) + vSeed * 40.0);
+      diffuseColor.rgb = mix(diffuseColor.rgb, base * 1.12, step(dTop, 0.22));
+      float p = fract(hc / 5.5) - 0.5;
+      float wash = exp(-pow(p * 5.5 / (0.35 + yb * 0.45), 2.0)) * (1.0 - smoothstep(0.0, 3.0, yb));
+      gEmis += base * warm * wash * 1.4 * uNight * step(0.25, seedA);
+      // the gate: a dark steel panel in the middle of one face
+      float gate = step(abs(hc - W * 0.5), 1.8) * step(yb, 2.6) * step(0.4, h21(vec2(vSeed, W)));
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.15, 0.14), gate);
+      diffuseColor.rgb *= mix(0.6, 1.0, smoothstep(0.0, 1.4, yb));
+    } else {
+      float g = h21(floor(vWP.xz * 1.2));
+      diffuseColor.rgb = mix(vec3(0.78, 0.74, 0.67), vec3(0.4, 0.5, 0.3), step(0.82, vn(vWP.xz * 0.15))) * (0.92 + 0.1 * g);
+      diffuseColor.rgb = mix(diffuseColor.rgb, base, step(dE2, 0.35));
+    }
+  }
+  else if (side) {
+    // plaster / stone grain and streaks
+    float grain = vn(vec2(hc * 0.6, yb * 0.3) + vSeed * 13.0);
+    float streak = vn(vec2(hc * 2.5, yb * 0.04) + vSeed * 7.0);
+    diffuseColor.rgb *= 0.92 + 0.1 * grain - 0.04 * streak * smoothstep(0.0, 20.0, dTop);
+    if (st == 6.0) diffuseColor.rgb *= 0.86 + 0.22 * vn(vec2(hc, yb) * 1.7 + vSeed * 3.0);
+    if (st != 8.0) {
+      float fh = 3.6, cw = 3.4, wx = 0.42, wy = 0.48, lit = 0.3, y0 = 0.4, top = 0.8;
+      if (st == 0.0) { fh = 3.7; cw = 3.8; wx = 0.36; wy = 0.44; lit = 0.33; y0 = 0.0; }
+      else if (st == 2.0) { fh = 4.0; cw = 3.0; wx = 0.5; wy = 0.46; lit = 0.55; }
+      else if (st == 3.0) { fh = 3.2; cw = 3.2; wx = 0.44; wy = 0.5; lit = 0.38; }
+      else if (st == 5.0) { fh = 3.7; cw = 2.6; wx = 0.62; wy = 0.6; lit = 0.34; top = 1.5; }
+      else if (st == 6.0) { fh = 3.1; cw = 2.8; wx = 0.2; wy = 0.24; lit = 0.35; }
+      else if (st == 9.0) { fh = 9.0; cw = 4.4; wx = 0.34; wy = 0.6; lit = 0.85; }
+      if (st == 4.0) {
+        // curtain wall aligned to the tower: vision glass, mullions, spandrel bands, panel-to-panel tint
+        float nc = max(1.0, floor(W / 1.55));
+        vec2 c = vec2(hc / (W / nc), yb / 3.9);
+        vec2 f = fract(c); vec2 id = floor(c);
+        float aaG = clamp(1.6 - 2.2 * max(fwidth(c.x), fwidth(c.y)), 0.0, 1.0);
+        float mullX = step(f.x, 0.04) + step(0.96, f.x);
+        float spand = step(f.y, 0.22);
+        float frameAmt = mix(0.22, clamp(mullX + spand, 0.0, 1.0), aaG);
+        float panel = 0.93 + 0.12 * h21(id + vSeed * 9.0);
+        vec3 glassCol = (base * 0.5 + vec3(0.015, 0.04, 0.06)) * panel;
+        vec3 frameCol = mix(base * 0.7, vec3(0.75, 0.77, 0.78), 0.45);
+        diffuseColor.rgb = mix(glassCol, frameCol, frameAmt);
+        gGlass = 1.0 - frameAmt * 0.65;
+        float floorLit = step(h21(vec2(floor(id.x / 5.0), id.y) + vSeed * 31.0), 0.42);
+        vec3 tint = mix(vec3(1.0, 0.83, 0.62), vec3(0.78, 0.88, 1.0), step(0.5, h21(id.yy + vSeed)));
+        gEmis += tint * floorLit * (0.25 + 0.35 * h21(id + vSeed)) * (1.0 - frameAmt) * uNight * 0.6;
+        // bright lobby
+        gEmis += warm * step(yb, 5.5) * (1.0 - frameAmt) * uNight * 0.9;
+      } else {
+        float nc = max(1.0, floor(W / cw));
+        vec2 c = vec2(hc / (W / nc), (yb - y0) / fh);
+        vec2 f = fract(c); vec2 id = floor(c);
+        vec2 dm = (abs(f - 0.5) - vec2(wx, wy) * 0.5) * vec2(W / nc, fh);   // metres from the window edge (negative inside)
+        float inside = step(max(dm.x, dm.y), 0.0);
+        float frame = inside * step(-0.09, max(dm.x, dm.y));
+        float sill = step(dm.x, 0.08) * step(abs((f.y - (0.5 - wy * 0.5)) * fh + 0.06), 0.06);
+        if (st == 0.0 && yb < 3.4) { inside = 0.0; frame = 0.0; sill = 0.0; }
+        if (dTop < top || c.y < 0.0) { inside = 0.0; frame = 0.0; sill = 0.0; }
+        if (st == 9.0) inside *= step(f.y, 0.5 + wy * 0.5 - 0.1 * (1.0 - pow(clamp(abs(f.x - 0.5) / (wx * 0.5), 0.0, 1.0), 2.0)));
+        float aa = clamp(1.4 - 1.6 * max(fwidth(c.x), fwidth(c.y)), 0.0, 1.0);
+        float rnd = h21(id + vSeed * 17.0);
+        float curtain = step(0.72, h21(id * 1.7 + vSeed));
+        vec3 glassCol = mix(vec3(0.10, 0.13, 0.16), vec3(0.3, 0.36, 0.4), rnd);
+        glassCol = mix(glassCol, vec3(0.82, 0.76, 0.64), curtain * 0.8);
+        if (st == 6.0) { glassCol = vec3(0.1, 0.07, 0.05); curtain = 0.0; }
+        // recess shadow under the head of each window
+        float head = smoothstep(0.0, 0.45, -((f.y - (0.5 + wy * 0.5)) * fh));
+        glassCol *= mix(0.5, 1.0, head);
+        vec3 frameCol = st == 0.0 || st == 6.0 ? base * 1.12 : vec3(0.32, 0.33, 0.34);
+        float glassA = (inside - frame) * aa;
+        vec3 col = diffuseColor.rgb;
+        col = mix(col, frameCol, frame * aa);
+        col = mix(col, glassCol, glassA);
+        col = mix(col, base * 0.6, sill * aa);
+        // centre mullion, and split air-conditioner units beside some windows (a Riyadh facade staple)
+        float cwm = W / nc;
+        col = mix(col, frameCol, inside * step(abs(f.x - 0.5) * cwm, 0.035) * aa);
+        float axl = (f.x - 0.5 - wx * 0.5) * cwm, ayl = (f.y - (0.5 - wy * 0.5)) * fh;
+        float ac = step(0.12, axl) * step(axl, 0.95) * step(0.0, ayl) * step(ayl, 0.55) * step(0.6, h21(id + vec2(3.1, 7.7) + vSeed)) * step(st, 3.5) * (1.0 - step(dTop, top)) * step(0.0, c.y) * step(3.4, yb);
+        col = mix(col, vec3(0.84, 0.84, 0.82) * (0.86 + 0.14 * step(0.5, fract(ayl * 14.0))), ac * aa);
+        // average when the grid is too small to resolve
+        float cover = wx * wy;
+        diffuseColor.rgb = mix(mix(col, glassCol, cover * 0.7 * (1.0 - aa)), col, aa);
+        if (st == 2.0 && yb < 4.6) {
+          // shopfronts and the sign band above them, in bays aligned to the building
+          float nb = max(1.0, floor(W / 7.0)); float bw = W / nb;
+          float bp = fract(hc / bw); float bay = floor(hc / bw);
+          float shop = step(yb, 3.3) * step(0.05, bp) * step(bp, 0.95);
+          float band = step(3.55, yb) * step(yb, 4.45) * step(0.07, bp) * step(bp, 0.93);
+          vec3 sc = 0.55 + 0.45 * cos(6.2831 * (h21(vec2(bay, vSeed)) + vec3(0.0, 0.33, 0.67)));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.12, 0.15, 0.17), shop);
+          diffuseColor.rgb = mix(diffuseColor.rgb, sc, band);
+          gEmis += shop * mix(warm, vec3(0.95, 0.97, 1.0), step(0.5, h21(vec2(bay, 2.0)))) * 1.1 * uNight;
+          gEmis += band * sc * (0.12 + 2.0 * uNight);
+          gGlass = shop * 0.7;
+          glassA = 0.0;
+        }
+        gGlass = max(gGlass, glassA * (1.0 - curtain) * 0.6);
+        // lit rooms: warm, cool or the blue of a television; curtains glow softly
+        float on = step(rnd, lit) * glassA;
+        float kind = h21(id.yx + vSeed * 5.0);
+        vec3 room = kind < 0.68 ? warm : kind < 0.9 ? vec3(0.92, 0.95, 1.0) : vec3(0.45, 0.6, 1.0) * (0.75 + 0.25 * sin(uTime * 9.0 + rnd * 40.0));
+        float grad = 0.75 + 0.35 * smoothstep(0.0, 1.0, f.y);
+        gEmis += on * room * grad * mix(0.55, 0.35, curtain) * (0.6 + 0.5 * rnd) * uNight;
+        // mosques are floodlit
+        if (st == 9.0) gEmis += warm * base * 0.22 * uNight * (1.0 - 0.6 * smoothstep(0.0, H, yb));
+      }
+      // facade LED accents on taller buildings: vertical corner strips and a crown line
+      if ((st == 4.0 || st == 5.0) && H > 40.0 && loc) {
+        vec3 acc = seedA < 0.33 ? vec3(1.0, 0.8, 0.45) : seedA < 0.66 ? vec3(0.85, 0.92, 1.0) : vec3(0.3, 0.85, 1.0);
+        float on2 = step(0.45, h21(vec2(vSeed * 13.0, 1.0)));
+        gEmis += acc * 2.4 * uNight * on2 * (step(dE, 0.35) + step(dTop, 0.9) * step(0.5, seedA));
+      }
+    }
+    // contact shadow at the base, darker vertical corners, soft streetlight spill on the ground floors
+    diffuseColor.rgb *= mix(0.62, 1.0, smoothstep(0.0, 4.5, yb)) * mix(0.8, 1.0, smoothstep(0.0, 1.2, dE));
+    gEmis += base * vec3(1.0, 0.78, 0.5) * 0.07 * uNight * (1.0 - smoothstep(0.0, 9.0, yb));
+  } else {
+    // roofs: weathered membrane, slightly darker than the walls, with a lighter parapet edge
+    diffuseColor.rgb *= (0.8 + 0.12 * vn(vWP.xz * 0.5)) ;
+    if (loc) diffuseColor.rgb = mix(diffuseColor.rgb, base * 1.05, step(dE2, 0.4));
+  }
+  }`;
 
 export function makeBuildingMaterial({ coarse = false, always = false } = {}) {
   const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86, metalness: 0.0 });
@@ -32,7 +215,9 @@ export function makeBuildingMaterial({ coarse = false, always = false } = {}) {
 attribute float aStyle; attribute float aSeed;
 ${HEAD}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
+  vLP = position; vLN = normal; vScl = vec3(0.0);
 #ifdef USE_INSTANCING
+  vScl = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
   float dFocus = distance(instanceMatrix[3].xz, uFocus);
   ${always ? '' : coarse ? 'if (dFocus < uDetailR) transformed = vec3(0.0);' : 'if (dFocus >= uDetailR) transformed = vec3(0.0);'}
 #endif`)
@@ -50,90 +235,14 @@ ${HEAD}`)
 ${HEAD}
 float gGlass; vec3 gEmis;`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-  gGlass = 0.0; gEmis = vec3(0.0);
-  {
-  float st = floor(vStyle + 0.5);
-  vec3 n = normalize(vWN);
-  bool side = abs(n.y) < 0.5;
-  vec2 tg = normalize(vec2(-n.z, n.x));
-  float t = dot(vWP.xz, tg);
-  float y = vWP.y;
-  vec3 warm = vec3(1.0, 0.72, 0.42);
-  if (st == 10.0) { gEmis = vec3(1.0, 0.86, 0.62) * 4.0 * uNight; diffuseColor.rgb = vec3(0.9); }
-  else if (st == 11.0) { gEmis = vec3(0.15, 1.0, 0.35) * 3.0 * uNight; diffuseColor.rgb = vec3(0.6, 0.9, 0.7); }
-  else if (st == 14.0) {
-    vec3 led = 0.5 + 0.5 * cos(6.2831 * (uTime * 0.05 + vSeed + vec3(0.0, 0.33, 0.67)));
-    gEmis = led * (0.02 + 2.2 * uNight); diffuseColor.rgb = mix(vec3(0.85), led, uNight);
-  }
-  else if (st == 15.0) { gEmis = diffuseColor.rgb * (0.25 + 2.4 * uNight); }
-  else if (st == 12.0) { diffuseColor.rgb *= 1.0; gEmis = diffuseColor.rgb * 0.05; }
-  else if (st == 7.0 || st == 13.0 || st == 1.0 && !side) {
-    // paving, medians, courtyard tops: subtle tile grain
-    float g = h21(floor(vWP.xz * 0.9));
-    diffuseColor.rgb *= 0.93 + 0.1 * g;
-  }
-  else if (side && st != 1.0 && st != 8.0) {
-    float fh = 3.5, cw = 3.2, wx = 0.42, wy = 0.45, lit = 0.3;
-    if (st == 0.0) { fh = 3.7; cw = 3.6; wx = 0.34; wy = 0.42; lit = 0.32; }
-    else if (st == 2.0) { fh = 4.0; cw = 2.8; wx = 0.5; wy = 0.46; lit = 0.6; }
-    else if (st == 3.0) { fh = 3.2; cw = 3.0; wx = 0.4; wy = 0.48; lit = 0.36; }
-    else if (st == 5.0) { fh = 3.7; cw = 2.4; wx = 0.55; wy = 0.6; lit = 0.4; }
-    else if (st == 6.0) { fh = 3.1; cw = 2.6; wx = 0.18; wy = 0.22; lit = 0.35; }
-    else if (st == 9.0) { fh = 9.0; cw = 4.2; wx = 0.32; wy = 0.55; lit = 0.8; }
-    if (st == 4.0) {
-      // curtain wall: tinted glass, thin mullions, floor spandrels
-      vec2 c = vec2(t / 1.6, y / 3.9);
-      vec2 f = fract(c); vec2 id = floor(c);
-      float aaG = clamp(1.6 - 2.2 * max(fwidth(c.x), fwidth(c.y)), 0.0, 1.0);
-      float mull = mix(0.2, step(0.93, f.x) + step(0.86, f.y), aaG);
-      vec3 glassCol = diffuseColor.rgb * 0.55 + vec3(0.02, 0.05, 0.07);
-      diffuseColor.rgb = mix(glassCol, diffuseColor.rgb * 1.15 + 0.1, clamp(mull, 0.0, 1.0));
-      gGlass = 1.0 - clamp(mull, 0.0, 1.0) * 0.7;
-      float floorLit = step(h21(vec2(floor(id.x / 6.0), id.y) + vSeed * 31.0), 0.4);
-      vec3 tint = mix(vec3(1.0, 0.82, 0.6), vec3(0.75, 0.85, 1.0), h21(id.yy + vSeed));
-      gEmis = tint * floorLit * (0.35 + 0.4 * h21(id + vSeed)) * (1.0 - clamp(mull, 0.0, 1.0)) * uNight * 0.42;
-    } else {
-      vec2 c = vec2(t / cw, (y - 0.3) / fh);
-      vec2 f = fract(c); vec2 id = floor(c);
-      float win = step(abs(f.x - 0.5), wx * 0.5) * step(abs(f.y - 0.52), wy * 0.5);
-      // fade the window grid to its average when cells get smaller than a few pixels
-      float aa = clamp(1.4 - 1.6 * max(fwidth(c.x), fwidth(c.y)), 0.0, 1.0);
-      win = mix(wx * wy * 0.8, win, aa);
-      if (st == 0.0 && y < 3.4) win = 0.0;           // compound wall hides the ground floor
-      if (st == 9.0) { win *= step(f.y, 0.52 + wy * 0.5 - 0.08 * (1.0 - pow(abs(f.x - 0.5) / (wx * 0.5), 2.0))); }
-      float rnd = h21(id + vSeed * 17.0);
-      vec3 glassCol = mix(vec3(0.16, 0.2, 0.24), vec3(0.35, 0.42, 0.46), rnd);
-      if (st == 6.0) glassCol = vec3(0.12, 0.09, 0.07);
-      if (st == 2.0 && y < 4.6) {
-        // shopfronts and the sign band above them
-        float shop = step(y, 3.3);
-        float band = step(3.5, y) * step(y, 4.5);
-        float bay = floor(t / 7.0);
-        vec3 sc = 0.55 + 0.45 * cos(6.2831 * (h21(vec2(bay, vSeed)) + vec3(0.0, 0.33, 0.67)));
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.18, 0.22, 0.25), shop * step(0.06, fract(t / 7.0)));
-        diffuseColor.rgb = mix(diffuseColor.rgb, sc, band * step(0.08, fract(t / 7.0)) * step(fract(t / 7.0), 0.92));
-        gEmis += shop * warm * 0.9 * uNight * step(0.06, fract(t / 7.0));
-        gEmis += band * sc * (0.15 + 2.2 * uNight) * step(0.08, fract(t / 7.0)) * step(fract(t / 7.0), 0.92);
-        gGlass = shop * 0.6;
-        win = 0.0;
-      }
-      diffuseColor.rgb = mix(diffuseColor.rgb, glassCol, win);
-      gGlass = max(gGlass, win * 0.55);
-      float on = step(rnd, lit) * win;
-      gEmis += on * mix(warm, vec3(0.9, 0.95, 1.0), step(0.7, h21(id.yx + vSeed))) * (0.3 + 0.35 * rnd) * uNight;
-    }
-    diffuseColor.rgb *= 0.72 + 0.28 * smoothstep(0.0, 7.0, y);
-  } else if (!side) {
-    diffuseColor.rgb *= 0.9;
-  }
-  }`)
+${FACADE}`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
-  metalnessFactor = mix(metalnessFactor, 0.85, gGlass);
-  roughnessFactor = mix(roughnessFactor, 0.12, gGlass);`)
+  metalnessFactor = mix(metalnessFactor, 0.9, gGlass);
+  roughnessFactor = mix(roughnessFactor, 0.08, gGlass);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
   totalEmissiveRadiance += gEmis;`);
   };
-  m.customProgramCacheKey = () => 'bld' + (always ? 'A' : coarse ? 'C' : 'D');
+  m.customProgramCacheKey = () => 'bld2' + (always ? 'A' : coarse ? 'C' : 'D');
   return m;
 }
 
@@ -151,8 +260,9 @@ export function nightGlow(color, dayI = 0, nightI = 2.5, opts = {}) {
 }
 
 // ---------- ground: sun-bleached asphalt inside the city, sand and gravel outside ----------
-export function makeGroundMaterial() {
+export function makeGroundMaterial({ asphalt = false } = {}) {
   const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.97 });
+  m.customProgramCacheKey = () => 'ground' + asphalt;
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, U, { uMask: { value: new THREE.Vector4(MASK_WORLD.x0, MASK_WORLD.z0, MASK_WORLD.x1, MASK_WORLD.z1) } });
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGP;')
@@ -166,9 +276,11 @@ float n2(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
       .replace('#include <color_fragment>', `#include <color_fragment>
   {
     vec2 p = vGP.xz;
-    float inside = step(uMask.x, p.x) * step(p.x, uMask.z) * step(uMask.y, p.y) * step(p.y, uMask.w);
+    float inside = ${asphalt ? '1.0' : 'step(uMask.x, p.x) * step(p.x, uMask.z) * step(uMask.y, p.y) * step(p.y, uMask.w)'};
     float grain = n2(p * 0.35) * 0.5 + n2(p * 2.1) * 0.5;
-    vec3 asphalt = mix(vec3(0.30, 0.295, 0.29), vec3(0.37, 0.355, 0.34), grain);
+    vec3 asphalt = mix(vec3(0.052, 0.05, 0.048), vec3(0.075, 0.072, 0.068), grain);
+    asphalt *= 0.9 + 0.14 * n2(p * 0.05) + 0.05 * n2(p * 9.0);   // patches and aggregate
+    asphalt = mix(asphalt, vec3(0.032, 0.031, 0.03), smoothstep(0.75, 0.95, n2(p * 0.02 + 3.0)) * 0.5);  // oil and repairs
     float dune = n2(p * 0.0021) * 0.6 + n2(p * 0.011) * 0.3 + n2(p * 0.09) * 0.1;
     vec3 sand = mix(vec3(0.74, 0.60, 0.42), vec3(0.86, 0.72, 0.52), dune);
     sand = mix(sand, vec3(0.62, 0.52, 0.40), smoothstep(0.62, 0.8, n2(p * 0.004 + 9.0)) * 0.6);
@@ -251,3 +363,32 @@ export function palmGeometries() {
 }
 export const palmTrunkMat = new THREE.MeshStandardMaterial({ color: 0x7a5f45, roughness: 0.95 });
 export const palmCrownMat = new THREE.MeshStandardMaterial({ color: 0x4f6a2c, roughness: 0.8, side: THREE.DoubleSide });
+
+// Additive light pools on the ground (street lamps, headlights). Instance colour = light colour x strength.
+export const poolMat = new THREE.ShaderMaterial({
+  uniforms: { uNight: U.uNight },
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+  polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  vertexShader: `#include <common>
+#include <logdepthbuf_pars_vertex>
+varying vec2 vUv; varying vec3 vCol;
+void main() {
+  vUv = uv * 2.0 - 1.0;
+  vCol = vec3(1.0);
+#ifdef USE_INSTANCING_COLOR
+  vCol = instanceColor;
+#endif
+  vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * viewMatrix * wp;
+#include <logdepthbuf_vertex>
+}`,
+  fragmentShader: `#include <logdepthbuf_pars_fragment>
+uniform float uNight; varying vec2 vUv; varying vec3 vCol;
+void main() {
+#include <logdepthbuf_fragment>
+  float r = length(vUv);
+  float a = pow(max(0.0, 1.0 - r), 2.0) * 0.8 + 0.25 * pow(max(0.0, 1.0 - r * 2.5), 3.0);
+  gl_FragColor = vec4(vCol * a * uNight, 1.0);
+}`
+});
+export const poolGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
