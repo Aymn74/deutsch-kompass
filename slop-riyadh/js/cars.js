@@ -31,9 +31,10 @@ export class Cars {
       scene.add(m);
       return m;
     });
-    this.beamOff = new THREE.Matrix4().makeTranslation(11, 0.3, 0).multiply(new THREE.Matrix4().makeScale(19, 1, 7));
+    // a short, faint pool hugging the bumper, so from behind it never reads as an oncoming car
+    this.beamOff = new THREE.Matrix4().makeTranslation(7.5, 0.3, 0).multiply(new THREE.Matrix4().makeScale(10, 1, 4));
     this.beams = new THREE.InstancedMesh(poolGeo, poolMat, count);
-    this.beams.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3).fill(0.3), 3);
+    this.beams.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3).fill(0.12), 3);
     this.beams.count = 0; this.beams.frustumCulled = false; this.beams.renderOrder = 3;
     scene.add(this.beams);
     this.cars = [];
@@ -113,7 +114,7 @@ export class Cars {
     for (const g of groups.values()) { g.sort((a, b) => b.p - a.p); for (let i = 0; i < g.length; i++) g[i].lead = i ? g[i - 1] : null; }
     const counts = [0, 0, 0];
     let nb = 0;
-    const night = U.uNight.value > 0.05;
+    const night = U.uNight.value > 0.6;
     for (const c of this.cars) {
       if (!c.ok) { this.place(c, focus); continue; }
       let gap = c.lead ? c.lead.p - c.p - 6 : 200;

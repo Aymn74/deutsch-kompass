@@ -165,17 +165,25 @@ const peds = (() => {
   const list = Array.from({ length: N }, () => ({ ok: false }));
   const m = new THREE.Matrix4(), zero = new THREE.Matrix4();
   const white = new THREE.Color('#f3f1ec'), black = new THREE.Color('#15151a'), skin = new THREE.Color('#b98a66'), scarf = new THREE.Color('#d9d2cc');
+  const perSeg = new Map();   // at most three walkers per pavement segment, so they never bunch up
   function respawn(p, fx, fz) {
+    if (p.key !== undefined) { perSeg.set(p.key, (perSeg.get(p.key) || 1) - 1); p.key = undefined; }
     for (let tries = 0; tries < 10; tries++) {
       const a = Math.random() * Math.PI * 2, r = 20 + Math.random() * 300;
-      const hit = osm.nearestRoad(fx + Math.cos(a) * r, fz + Math.sin(a) * r, 60, (rr) => { const c = osm.cls(rr); return c >= RC.primary && c <= RC.living && !(osm.flags(rr) & (F.bridge | F.tunnel)); });
+      const hit = osm.nearestRoad(fx + Math.cos(a) * r, fz + Math.sin(a) * r, 60, (rr) => { const c = osm.cls(rr); return c >= RC.tertiary && c <= RC.living && !(osm.flags(rr) & (F.bridge | F.tunnel)); });
       if (!hit) continue;
       const st = osm.s.roads[hit.road * 4 + 2], P = osm.s.roadPts, k = (st + hit.seg) * 2;
       const x0 = P[k], z0 = P[k + 1], x1 = P[k + 2], z1 = P[k + 3], L = Math.hypot(x1 - x0, z1 - z0);
       if (L < 15) continue;
+      const key = hit.road * 65536 + hit.seg;
+      if ((perSeg.get(key) || 0) >= Math.min(3, Math.floor(L / 12))) continue;
       const side = Math.random() < 0.5 ? 1 : -1, off = osm.width(hit.road) / 2 + 1.6;
       const nx = -(z1 - z0) / L * side * off, nz = (x1 - x0) / L * side * off;
-      Object.assign(p, { ax: x0 + nx, az: z0 + nz, bx: x1 + nx, bz: z1 + nz, L, s: Math.random() * L, dir: Math.random() < 0.5 ? 1 : -1, v: 1.0 + Math.random() * 0.6, abaya: Math.random() < 0.35, ok: true });
+      // the pavement must not lie on another carriageway (parallel service roads, junctions)
+      const onRoad = (x, z) => { const h = osm.nearestRoad(x, z, 6, (rr) => rr !== hit.road && osm.cls(rr) !== RC.pedestrian); return h && h.dist < 4; };
+      if (onRoad(x0 + nx, z0 + nz) || onRoad(x1 + nx, z1 + nz) || onRoad((x0 + x1) / 2 + nx, (z0 + z1) / 2 + nz)) continue;
+      perSeg.set(key, (perSeg.get(key) || 0) + 1);
+      Object.assign(p, { key, ax: x0 + nx, az: z0 + nz, bx: x1 + nx, bz: z1 + nz, L, s: Math.random() * L, dir: Math.random() < 0.5 ? 1 : -1, v: 1.0 + Math.random() * 0.6, abaya: Math.random() < 0.35, ok: true });
       return;
     }
     p.ok = false;
@@ -330,7 +338,7 @@ addEventListener('keydown', (e) => {
   if (k === 'KeyH') toggleHud();
   if (k === 'KeyT') { const ids = Object.keys(PRESETS); applyPreset(ids[(ids.indexOf(presetId) + 1) % ids.length]); }
   if (k === 'Escape' && !$('fullmap-modal').hidden) toggleMap(false);
-  if (['Space', 'ArrowUp', 'ArrowDown'].includes(k)) e.preventDefault();
+  if (['Space', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'].includes(k)) e.preventDefault();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -338,7 +346,8 @@ function readKeys() {
   input.up = keys.KeyW || keys.ArrowUp; input.down = keys.KeyS || keys.ArrowDown;
   input.left = keys.KeyA || keys.ArrowLeft; input.right = keys.KeyD || keys.ArrowRight;
   input.boost = keys.ShiftLeft || keys.ShiftRight || touchBoost;
-  input.jump = keys.Space || touchUp; input.descend = keys.KeyQ || keys.ControlLeft || touchDown;
+  input.jump = keys.Space || keys.KeyE || keys.PageUp || touchUp;
+  input.descend = keys.KeyQ || keys.PageDown || keys.ControlLeft || touchDown;
 }
 // orbit with the mouse
 {
@@ -390,18 +399,20 @@ if (touch) {
   });
   const up = (e) => pts.delete(e.pointerId);
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
-  document.querySelectorAll('.touch-action').forEach((b) => {
-    const set = (v) => { const a = b.dataset.touchAction; if (a === 'up') touchUp = v; if (a === 'down') touchDown = v; if (a === 'boost') touchBoost = v; b.setAttribute('aria-pressed', v); };
-    b.addEventListener('pointerdown', (e) => { e.preventDefault(); set(true); });
-    b.addEventListener('pointerup', () => set(false)); b.addEventListener('pointerleave', () => set(false)); b.addEventListener('pointercancel', () => set(false));
-  });
 }
+document.querySelectorAll('.touch-action').forEach((b) => {
+  const set = (v) => { const a = b.dataset.touchAction; if (a === 'up') touchUp = v; if (a === 'down') touchDown = v; if (a === 'boost') touchBoost = v; b.setAttribute('aria-pressed', v); };
+  b.addEventListener('pointerdown', (e) => { e.preventDefault(); set(true); });
+  b.addEventListener('pointerup', () => set(false)); b.addEventListener('pointerleave', () => set(false)); b.addEventListener('pointercancel', () => set(false));
+});
+// a clicked HUD button must not keep keyboard focus, or Space would press it again instead of flying
+document.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.closest('#fullmap-modal')) b.blur(); });
 
 // ---------- modes, teleports ----------
 const HINTS = {
   person: 'W A S D للمشي · Shift للركض · Space للقفز · اسحب للتدوير',
   car: 'W للتسارع · S للفرملة · A D للتوجيه · Shift تيربو · C منظور السائق',
-  heli: 'W A S D للطيران · Space صعود · Q هبوط · Shift سرعة'
+  heli: 'W A S D للطيران · Space أو E صعود · Q هبوط · Shift سرعة'
 };
 function setMode(m) {
   player.setMode(m);
@@ -409,6 +420,7 @@ function setMode(m) {
   $('hud-active-mode').textContent = player.modeInfo.label;
   $('hud-controls-hint').textContent = touch ? '' : HINTS[m];
   document.querySelectorAll('.touch-action[data-touch-action="down"]').forEach((b) => (b.hidden = m !== 'heli'));
+  if (!touch) $('touch-controls').hidden = m !== 'heli';
   document.querySelectorAll('.touch-action[data-touch-action="up"]').forEach((b) => (b.hidden = m === 'car'));
   const upLabel = document.querySelector('[data-touch-label="up"]'); if (upLabel) upLabel.textContent = m === 'heli' ? 'صعود' : 'قفز';
 }
@@ -765,7 +777,7 @@ function frame() {
     dust.rotation.y += dt * 0.15;
   }
   // headlights in the dark
-  player.models.car.userData.spot.intensity = player.mode === 'car' ? U.uNight.value * 260 : 0;
+  player.models.car.userData.spot.intensity = player.mode === 'car' ? Math.max(0, U.uNight.value - 0.4) * 420 : 0;
   if (composer) composer.render(); else renderer.render(scene, camera);
   mmTimer -= dt;
   if (mmTimer <= 0 && !document.body.classList.contains('hud-hidden')) { mmTimer = 0.1; drawMinimap(); }

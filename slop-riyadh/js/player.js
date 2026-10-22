@@ -218,7 +218,7 @@ export class Player {
       this.speed += (target - this.speed) * Math.min(1, dt * 1.4);
       this.yaw += turn * dt * 1.3;
       const climb = (input.jump ? 1 : 0) - (input.descend ? 1 : 0) + (input.az || 0);
-      this.vy += (climb * 18 - this.vy) * Math.min(1, dt * 2.5);
+      this.vy += (climb * 22 - this.vy) * Math.min(1, dt * 4);
       this.alt = THREE.MathUtils.clamp(this.alt + this.vy * dt, 2, 1400);
       p.x += Math.cos(this.yaw) * this.speed * dt;
       p.z -= Math.sin(this.yaw) * this.speed * dt;

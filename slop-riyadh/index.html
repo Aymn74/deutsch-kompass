@@ -191,6 +191,12 @@ body.hud-hidden .icon-hide { display: none; } body.hud-hidden .icon-show { displ
   #touch-controls { padding-block: 0 calc(16px + env(safe-area-inset-bottom, 0px)); padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
   .hud-bottom { justify-content: center; }
 }
+/* computers: only the climb and descend buttons, at the right edge, while flying */
+@media (pointer: fine) {
+  #touch-stick, .touch-action[data-touch-action="boost"] { display: none; }
+  #touch-controls { justify-content: flex-end; padding-block: 0 calc(50vh - 80px); }
+  .touch-action { width: 58px; height: 58px; cursor: pointer; }
+}
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -325,8 +331,8 @@ body.hud-hidden .icon-hide { display: none; } body.hud-hidden .icon-show { displ
   <section id="touch-controls" aria-label="أدوات اللمس" hidden>
     <div id="touch-stick" role="group" aria-label="عصا الحركة"><span id="touch-stick-knob"></span></div>
     <div class="touch-actions">
-      <button class="touch-action" data-touch-action="up" type="button" aria-pressed="false"><span data-touch-label="up">قفز</span></button>
-      <button class="touch-action" data-touch-action="down" type="button" aria-pressed="false" hidden><span>هبوط</span></button>
+      <button class="touch-action" data-touch-action="up" type="button" aria-pressed="false"><span aria-hidden="true">↑</span><span data-touch-label="up">قفز</span></button>
+      <button class="touch-action" data-touch-action="down" type="button" aria-pressed="false" hidden><span aria-hidden="true">↓</span><span>هبوط</span></button>
       <button class="touch-action" data-touch-action="boost" type="button" aria-pressed="false"><span>تيربو</span></button>
     </div>
   </section>
